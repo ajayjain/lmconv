@@ -253,7 +253,9 @@ def right_shift(x, pad=None):
 
 
 def load_part_of_model(model, path):
-    params = torch.load(path)
+    checkpoint = torch.load(path)
+    params = checkpoint["model_state_dict"]
+    # TODO: Restore optimizer
     added = 0
     for name, param in params.items():
         if name in model.state_dict().keys():

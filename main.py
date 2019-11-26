@@ -1,6 +1,9 @@
 import time
 import os
 import argparse
+
+from PIL import Image
+from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,9 +11,9 @@ import torch.optim as optim
 from torch.optim import lr_scheduler
 from torchvision import datasets, transforms, utils
 from tensorboardX import SummaryWriter
-from utils import *
+
 from model import *
-from PIL import Image
+from utils import *
 
 parser = argparse.ArgumentParser()
 # data I/O
@@ -86,6 +89,7 @@ else :
 
 model = PixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
             input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix)
+model = nn.DataParallel(model)
 model = model.cuda()
 
 if args.load_params:
@@ -97,7 +101,7 @@ optimizer = optim.Adam(model.parameters(), lr=args.lr)
 scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=args.lr_decay)
 
 def sample(model):
-    model.train(False)
+    model.eval()
     data = torch.zeros(sample_batch_size, obs[0], obs[1], obs[2])
     data = data.cuda()
     for i in range(obs[1]):
@@ -109,55 +113,63 @@ def sample(model):
     return data
 
 print('starting training')
-writes = 0
+global_step = 0
 for epoch in range(args.max_epochs):
-    model.train(True)
-    torch.cuda.synchronize()
     train_loss = 0.
     time_ = time.time()
     model.train()
-    for batch_idx, (input,_) in enumerate(train_loader):
+    for batch_idx, (input,_) in enumerate(tqdm(train_loader, desc=f"Train epoch {epoch}")):
         input = input.cuda(non_blocking=True)
-        input = Variable(input)
         output = model(input)
         loss = loss_op(input, output)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         train_loss += loss.item()
-        if (batch_idx +1) % args.print_every == 0 : 
+
+        deno = args.batch_size * np.prod(obs) * np.log(2.)
+        writer.add_scalar('train/bpd', (loss.item() / deno), global_step)
+
+        if (batch_idx + 1) % args.print_every == 0: 
             deno = args.print_every * args.batch_size * np.prod(obs) * np.log(2.)
-            writer.add_scalar('train/bpd', (train_loss / deno), writes)
-            print('loss : {:.4f}, time : {:.4f}'.format(
+            print('loss : {:.4f}, time : {:.4f}, global step: {}'.format(
                 (train_loss / deno), 
-                (time.time() - time_)))
+                (time.time() - time_),
+                global_step))
             train_loss = 0.
-            writes += 1
             time_ = time.time()
 
+        global_step += 1
 
     # decrease learning rate
     scheduler.step()
 
-    torch.cuda.synchronize()
     model.eval()
-    test_loss = 0.
-    for batch_idx, (input,_) in enumerate(test_loader):
-        input = input.cuda(non_blocking=True)
-        input_var = Variable(input)
-        output = model(input_var)
-        loss = loss_op(input_var, output)
-        test_loss += loss.item()
-        del loss, output
+    with torch.no_grad():
+        test_loss = 0.
+        for batch_idx, (input,_) in enumerate(tqdm(test_loader, desc=f"Test epoch {epoch}")):
+            input = input.cuda(non_blocking=True)
+            input_var = Variable(input)
+            output = model(input_var)
+            loss = loss_op(input_var, output)
+            test_loss += loss.item()
+            del loss, output
 
-    deno = batch_idx * args.batch_size * np.prod(obs) * np.log(2.)
-    writer.add_scalar('test/bpd', (test_loss / deno), writes)
-    print('test loss : %s' % (test_loss / deno))
+        deno = batch_idx * args.batch_size * np.prod(obs) * np.log(2.)
+        test_loss = test_loss / deno
+        writer.add_scalar('test/bpd', test_loss, global_step)
+        print('test loss : %s' % test_loss)
 
-    if (epoch + 1) % args.save_interval == 0: 
-        torch.save(model.state_dict(), 'models/{}_{}.pth'.format(model_name, epoch))
-        print('sampling...')
-        sample_t = sample(model)
-        sample_t = rescaling_inv(sample_t)
-        utils.save_image(sample_t,'images/{}_{}.png'.format(model_name, epoch), 
-                nrow=5, padding=0)
+        if (epoch + 1) % args.save_interval == 0: 
+            torch.save({
+                "epoch": epoch,
+                "test_loss": test_loss,
+                "model_state_dict": model.module.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict()
+            }, 'models/{}_{}.pth'.format(model_name, epoch))
+
+            print('sampling...')
+            sample_t = sample(model)
+            sample_t = rescaling_inv(sample_t)
+            utils.save_image(sample_t,'images/{}_{}.png'.format(model_name, epoch), 
+                    nrow=5, padding=0)
