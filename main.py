@@ -8,8 +8,8 @@ import torch.optim as optim
 from torch.optim import lr_scheduler
 from torchvision import datasets, transforms, utils
 from tensorboardX import SummaryWriter
-from utils import * 
-from model import * 
+from utils import *
+from model import *
 from PIL import Image
 
 parser = argparse.ArgumentParser()
@@ -49,7 +49,7 @@ args = parser.parse_args()
 torch.manual_seed(args.seed)
 np.random.seed(args.seed)
 
-model_name = 'pcnn_lr:{:.5f}_nr-resnet{}_nr-filters{}'.format(args.lr, args.nr_resnet, args.nr_filters)
+model_name = 'pcnn_{}_lr{:.5f}_nr-resnet{}_nr-filters{}_bs{}'.format(args.dataset, args.lr, args.nr_resnet, args.nr_filters, args.batch_size)
 assert not os.path.exists(os.path.join('runs', model_name)), '{} already exists!'.format(model_name)
 writer = SummaryWriter(log_dir=os.path.join('runs', model_name))
 
@@ -61,24 +61,24 @@ rescaling_inv = lambda x : .5 * x  + .5
 kwargs = {'num_workers':1, 'pin_memory':True, 'drop_last':True}
 ds_transforms = transforms.Compose([transforms.ToTensor(), rescaling])
 
-if 'mnist' in args.dataset : 
+if 'mnist' in args.dataset :
     train_loader = torch.utils.data.DataLoader(datasets.MNIST(args.data_dir, download=True, 
                         train=True, transform=ds_transforms), batch_size=args.batch_size, 
                             shuffle=True, **kwargs)
-    
+
     test_loader  = torch.utils.data.DataLoader(datasets.MNIST(args.data_dir, train=False, 
                     transform=ds_transforms), batch_size=args.batch_size, shuffle=True, **kwargs)
-    
+
     loss_op   = lambda real, fake : discretized_mix_logistic_loss_1d(real, fake)
     sample_op = lambda x : sample_from_discretized_mix_logistic_1d(x, args.nr_logistic_mix)
 
-elif 'cifar' in args.dataset : 
+elif 'cifar' in args.dataset :
     train_loader = torch.utils.data.DataLoader(datasets.CIFAR10(args.data_dir, train=True, 
         download=True, transform=ds_transforms), batch_size=args.batch_size, shuffle=True, **kwargs)
-    
+
     test_loader  = torch.utils.data.DataLoader(datasets.CIFAR10(args.data_dir, train=False, 
                     transform=ds_transforms), batch_size=args.batch_size, shuffle=True, **kwargs)
-    
+
     loss_op   = lambda real, fake : discretized_mix_logistic_loss(real, fake)
     sample_op = lambda x : sample_from_discretized_mix_logistic(x, args.nr_logistic_mix)
 else :
@@ -117,14 +117,14 @@ for epoch in range(args.max_epochs):
     time_ = time.time()
     model.train()
     for batch_idx, (input,_) in enumerate(train_loader):
-        input = input.cuda(async=True)
+        input = input.cuda(non_blocking=True)
         input = Variable(input)
         output = model(input)
         loss = loss_op(input, output)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        train_loss += loss.data[0]
+        train_loss += loss.item()
         if (batch_idx +1) % args.print_every == 0 : 
             deno = args.print_every * args.batch_size * np.prod(obs) * np.log(2.)
             writer.add_scalar('train/bpd', (train_loss / deno), writes)
@@ -134,26 +134,26 @@ for epoch in range(args.max_epochs):
             train_loss = 0.
             writes += 1
             time_ = time.time()
-            
+
 
     # decrease learning rate
     scheduler.step()
-    
+
     torch.cuda.synchronize()
     model.eval()
     test_loss = 0.
     for batch_idx, (input,_) in enumerate(test_loader):
-        input = input.cuda(async=True)
+        input = input.cuda(non_blocking=True)
         input_var = Variable(input)
         output = model(input_var)
         loss = loss_op(input_var, output)
-        test_loss += loss.data[0]
+        test_loss += loss.item()
         del loss, output
 
     deno = batch_idx * args.batch_size * np.prod(obs) * np.log(2.)
     writer.add_scalar('test/bpd', (test_loss / deno), writes)
     print('test loss : %s' % (test_loss / deno))
-    
+
     if (epoch + 1) % args.save_interval == 0: 
         torch.save(model.state_dict(), 'models/{}_{}.pth'.format(model_name, epoch))
         print('sampling...')
