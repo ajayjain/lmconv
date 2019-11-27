@@ -13,6 +13,7 @@ from torchvision import datasets, transforms, utils
 from tensorboardX import SummaryWriter
 
 from model import *
+from ours import *
 from utils import *
 
 parser = argparse.ArgumentParser()
@@ -29,6 +30,8 @@ parser.add_argument('-t', '--save_interval', type=int, default=10,
                     help='Every how many epochs to write checkpoint/samples?')
 parser.add_argument('-r', '--load_params', type=str, default=None,
                     help='Restore training from previous model checkpoint?')
+parser.add_argument('--exp_name', type=str, default=None)
+parser.add_argument('--ours', action='store_true')
 # model
 parser.add_argument('-q', '--nr_resnet', type=int, default=5,
                     help='Number of residual blocks per stage of the model')
@@ -53,6 +56,8 @@ torch.manual_seed(args.seed)
 np.random.seed(args.seed)
 
 model_name = 'pcnn_{}_lr{:.5f}_nr-resnet{}_nr-filters{}_bs{}'.format(args.dataset, args.lr, args.nr_resnet, args.nr_filters, args.batch_size)
+if args.exp_name:
+    model_name = f'{model_name}_{args.exp_name}'
 assert not os.path.exists(os.path.join('runs', model_name)), '{} already exists!'.format(model_name)
 writer = SummaryWriter(log_dir=os.path.join('runs', model_name))
 
@@ -87,8 +92,12 @@ elif 'cifar' in args.dataset :
 else :
     raise Exception('{} dataset not in {mnist, cifar10}'.format(args.dataset))
 
-model = PixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
-            input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix)
+if args.ours:
+    model = OurPixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
+                input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix)
+else:
+    model = PixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
+                input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix)
 model = nn.DataParallel(model)
 model = model.cuda()
 
