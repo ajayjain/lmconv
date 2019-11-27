@@ -13,7 +13,7 @@ from utils import *
 
 class masked_conv2d(nn.Conv2d):
     def __init__(self, num_filters_in, num_filters_out, kernel_size=(3,3),
-                 mask_type='A', n_color=3):
+                 mask_type='B', n_color=1):
         """2D Convolution with masked weight for Autoregressive connection"""
         # Pad to maintain spatial dimensions
         padding = (int((kernel_size[0] - 1) / 2),
@@ -21,9 +21,7 @@ class masked_conv2d(nn.Conv2d):
         super(masked_conv2d, self).__init__(
             num_filters_in, num_filters_out, kernel_size, padding=padding)
         assert mask_type in ['A', 'B']
-        assert mask_type == 'A'  # TODO: Support mask type B.
-                                 # Mask type A is also not totally correctly implemented,
-                                 # as all center pixel filter channels are zeroed
+        assert n_color == 1  # TODO: Add support for color channel masking
         self.mask_type = mask_type
         ch_out, ch_in, height, width = self.weight.size()
 
@@ -42,25 +40,64 @@ class masked_conv2d(nn.Conv2d):
         xc = width // 2
         mask[:, :, yc, xc:] = 0
         mask[:, :, yc + 1:] = 0
-        # FIXME: Color masking doesn't seem to work properly, testing only
-        # with 1 color channel for now.
-        # if mask_type == 'A':
-        #     # Allow conditioning on previous colors in the center pixel
-        #     for i in range(ch_out):
-        #         for j in range(ch_in):
-        #             if (i % n_color) > (j % n_color):
-        #                 mask[i, j, yc, xc] = 1
-        # else:
-        #     # Allow conditioning on previous and current colors in the center pixel
-        #     for i in range(ch_out):
-        #         for j in range(ch_in):
-        #             if (i % n_color) >= (j % n_color):
-        #                 mask[i, j, yc, xc] = 1
+        if mask_type == 'B':
+            mask[:, :, yc, xc] = 1
         self.register_buffer('mask', mask)
 
     def forward(self, x):
         self.weight.data *= self.mask
         return super(masked_conv2d, self).forward(x)
+
+
+class OurPixelCNNLayer_up(nn.Module):
+    def __init__(self, nr_resnet, nr_filters, resnet_nonlinearity):
+        super(OurPixelCNNLayer_up, self).__init__()
+        self.nr_resnet = nr_resnet
+        conv_op = lambda cin, cout: masked_conv2d(cin, cout, mask_type='B', n_color=1)
+        # stream from pixels above and to the left
+        self.u_stream = nn.ModuleList([gated_resnet(nr_filters, conv_op, 
+                                        resnet_nonlinearity, skip_connection=0) 
+                                            for _ in range(nr_resnet)])
+        
+        # stream from pixels above and to the left, with skip connection
+        self.ul_stream = nn.ModuleList([gated_resnet(nr_filters, conv_op, 
+                                        resnet_nonlinearity, skip_connection=1) 
+                                            for _ in range(nr_resnet)])
+
+    def forward(self, u, ul):
+        u_list, ul_list = [], []
+        
+        for i in range(self.nr_resnet):
+            u  = self.u_stream[i](u)
+            ul = self.ul_stream[i](ul, a=u)
+            u_list  += [u]
+            ul_list += [ul]
+
+        return u_list, ul_list
+
+
+class OurPixelCNNLayer_down(nn.Module):
+    def __init__(self, nr_resnet, nr_filters, resnet_nonlinearity):
+        super(OurPixelCNNLayer_down, self).__init__()
+        self.nr_resnet = nr_resnet
+        conv_op = lambda cin, cout: masked_conv2d(cin, cout, mask_type='B', n_color=1)
+        # stream from pixels above
+        self.u_stream  = nn.ModuleList([gated_resnet(nr_filters, conv_op, 
+                                        resnet_nonlinearity, skip_connection=1) 
+                                            for _ in range(nr_resnet)])
+        
+        # stream from pixels above and to thes left
+        self.ul_stream = nn.ModuleList([gated_resnet(nr_filters, conv_op, 
+                                        resnet_nonlinearity, skip_connection=2) 
+                                            for _ in range(nr_resnet)])
+
+    def forward(self, u, ul, u_list, ul_list):
+        for i in range(self.nr_resnet):
+            u  = self.u_stream[i](u, a=u_list.pop())
+            ul = self.ul_stream[i](ul, a=torch.cat((u, ul_list.pop()), 1))
+        
+        return u, ul
+
 
 
 class OurPixelCNN(nn.Module):
@@ -78,37 +115,32 @@ class OurPixelCNN(nn.Module):
         self.right_shift_pad = nn.ZeroPad2d((1, 0, 0, 0))
         self.down_shift_pad  = nn.ZeroPad2d((0, 0, 1, 0))
 
+        assert input_channels == 1  # FIXME: temporary
+
         down_nr_resnet = [nr_resnet] + [nr_resnet + 1] * 2
-        self.down_layers = nn.ModuleList([PixelCNNLayer_down(down_nr_resnet[i], nr_filters, 
+        self.down_layers = nn.ModuleList([OurPixelCNNLayer_down(down_nr_resnet[i], nr_filters, 
                                                 self.resnet_nonlinearity) for i in range(3)])
 
-        self.up_layers   = nn.ModuleList([PixelCNNLayer_up(nr_resnet, nr_filters, 
+        self.up_layers   = nn.ModuleList([OurPixelCNNLayer_up(nr_resnet, nr_filters, 
                                                 self.resnet_nonlinearity) for _ in range(3)])
 
-        self.downsize_u_stream  = nn.ModuleList([down_shifted_conv2d(nr_filters, nr_filters, 
-                                                    stride=(1,1)) for _ in range(2)])
+        # TODO: Dilate convolutions to increase receptive field, as we no longer downsample
+        self.downsize_u_stream = nn.ModuleList([masked_conv2d(nr_filters, nr_filters, mask_type='B', n_color=input_channels)
+                                                 for _ in range(2)])
 
-        self.downsize_ul_stream = nn.ModuleList([down_right_shifted_conv2d(nr_filters, 
-                                                    nr_filters, stride=(1,1)) for _ in range(2)])
+        self.downsize_ul_stream = nn.ModuleList([masked_conv2d(nr_filters, nr_filters, mask_type='B', n_color=input_channels)
+                                                 for _ in range(2)])
         
-        self.upsize_u_stream  = nn.ModuleList([down_shifted_conv2d(nr_filters, nr_filters, 
-                                                    stride=(1,1)) for _ in range(2)])
+        self.upsize_u_stream = nn.ModuleList([masked_conv2d(nr_filters, nr_filters, mask_type='B', n_color=input_channels)
+                                              for _ in range(2)])
         
-        self.upsize_ul_stream = nn.ModuleList([down_right_shifted_conv2d(nr_filters, 
-                                                    nr_filters, stride=(1,1)) for _ in range(2)])
+        self.upsize_ul_stream = nn.ModuleList([masked_conv2d(nr_filters, nr_filters, mask_type='B', n_color=input_channels)
+                                              for _ in range(2)])
 
-        assert input_channels == 1  # FIXME: temporary
-        # self.u_init = down_shifted_conv2d(input_channels + 1, nr_filters, filter_size=(2,3), 
-        #                 shift_output_down=True)
-        self.u_init = masked_conv2d(input_channels + 1, nr_filters, kernel_size=(3,3),
-                                       mask_type='A', n_color=input_channels)
-
-        # self.ul_init = nn.ModuleList([down_shifted_conv2d(input_channels + 1, nr_filters, 
-        #                                     filter_size=(1,3), shift_output_down=True), 
-        #                                down_right_shifted_conv2d(input_channels + 1, nr_filters, 
-        #                                     filter_size=(2,1), shift_output_right=True)])
-        self.ul_init = masked_conv2d(input_channels + 1, nr_filters, kernel_size=(3,3),
-                                        mask_type='A', n_color=input_channels)
+        # NOTE: In PixelCNN++, u_init can access a 2x3 region above each pixel, while this mask
+        # only accesses a 1x3 region above the pixel and a pixel to the left
+        self.u_init = wn(masked_conv2d(input_channels + 1, nr_filters, mask_type='A', n_color=input_channels))
+        self.ul_init = wn(masked_conv2d(input_channels + 1, nr_filters, mask_type='A', n_color=input_channels))
 
         num_mix = 3 if self.input_channels == 1 else 10
         self.nin_out = nin(nr_filters, num_mix * nr_logistic_mix)
