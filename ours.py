@@ -7,7 +7,6 @@ from torch.autograd import Variable
 from torch.nn.utils import weight_norm as wn
 
 from layers import * 
-from model import PixelCNNLayer_up, PixelCNNLayer_down
 from utils import * 
 
 
@@ -97,7 +96,6 @@ class OurPixelCNNLayer_down(nn.Module):
             ul = self.ul_stream[i](ul, a=torch.cat((u, ul_list.pop()), 1))
         
         return u, ul
-
 
 
 class OurPixelCNN(nn.Module):
