@@ -1,7 +1,10 @@
+import math
 import pdb
+
 import numpy as np
 import torch 
 import torch.nn as nn
+from torch.nn.parameter import Parameter
 import torch.nn.functional as F
 from torch.autograd import Variable
 from torch.nn.utils import weight_norm as wn
@@ -10,19 +13,25 @@ from layers import *
 from utils import * 
 
 
-class masked_conv2d(nn.Conv2d):
-    def __init__(self, num_filters_in, num_filters_out, kernel_size=(3,3),
-                 dilation=1, mask_type='B', n_color=1):
-        """2D Convolution with masked weight for Autoregressive connection"""
-        # Pad to maintain spatial dimensions
-        padding = ((dilation * (kernel_size[0] - 1)) // 2,
-                   (dilation * (kernel_size[1] - 1)) // 2)
-        super(masked_conv2d, self).__init__(
-            num_filters_in, num_filters_out, kernel_size, padding=padding, dilation=dilation)
+class masked_conv2d(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=(3,3),
+                 dilation=1, mask_type='B'):
+        """2D Convolution with masked weight for autoregressive connection"""
+        super(masked_conv2d, self).__init__()
         assert mask_type in ['A', 'B']
-        assert n_color == 1  # TODO: Add support for color channel masking
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.dilation = dilation
         self.mask_type = mask_type
-        ch_out, ch_in, height, width = self.weight.size()
+
+        # Pad to maintain spatial dimensions
+        self.padding = ((dilation * (kernel_size[0] - 1)) // 2,
+                   (dilation * (kernel_size[1] - 1)) // 2)
+
+        # Conv parameters
+        self.weight = Parameter(torch.Tensor(out_channels, in_channels, *kernel_size))
+        self.bias = Parameter(torch.Tensor(out_channels))
 
         # Mask
         #         -------------------------------------
@@ -33,26 +42,39 @@ class masked_conv2d(nn.Conv2d):
         #        |  0       0       0       0       0 |
         #         -------------------------------------
         #  index    0       1     W//2    W//2+1
-
-        mask = torch.ones(ch_out, ch_in, height, width)
-        yc = height // 2
-        xc = width // 2
+        assert self.weight.size(0) == out_channels
+        assert self.weight.size(1) == in_channels
+        assert self.weight.size(2) == kernel_size[0]
+        assert self.weight.size(3) == kernel_size[1]
+        mask = torch.ones(out_channels, in_channels, kernel_size[0], kernel_size[1])
+        yc = kernel_size[0] // 2
+        xc = kernel_size[1] // 2
         mask[:, :, yc, xc:] = 0
         mask[:, :, yc + 1:] = 0
         if mask_type == 'B':
             mask[:, :, yc, xc] = 1
         self.register_buffer('mask', mask)
 
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        # From PyTorch _ConvNd implementation
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
+            bound = 1 / math.sqrt(fan_in)
+            nn.init.uniform_(self.bias, -bound, bound)
+
     def forward(self, x):
-        self.weight.data *= self.mask
-        return super(masked_conv2d, self).forward(x)
+        masked_weight = self.weight * self.mask
+        return F.conv2d(x, masked_weight, self.bias, padding=self.padding, dilation=self.dilation)
 
 
 class OurPixelCNNLayer_up(nn.Module):
     def __init__(self, nr_resnet, nr_filters, resnet_nonlinearity, kernel_size=(5,5)):
         super(OurPixelCNNLayer_up, self).__init__()
         self.nr_resnet = nr_resnet
-        conv_op = lambda cin, cout: masked_conv2d(cin, cout, mask_type='B', n_color=1, kernel_size=kernel_size)
+        conv_op = lambda cin, cout: wn(masked_conv2d(cin, cout, mask_type='B', kernel_size=kernel_size))
         # stream from pixels above and to the left
         self.u_stream = nn.ModuleList([gated_resnet(nr_filters, conv_op, 
                                         resnet_nonlinearity, skip_connection=0) 
@@ -79,7 +101,7 @@ class OurPixelCNNLayer_down(nn.Module):
     def __init__(self, nr_resnet, nr_filters, resnet_nonlinearity, kernel_size=(5,5)):
         super(OurPixelCNNLayer_down, self).__init__()
         self.nr_resnet = nr_resnet
-        conv_op = lambda cin, cout: masked_conv2d(cin, cout, mask_type='B', n_color=1, kernel_size=kernel_size)
+        conv_op = lambda cin, cout: wn(masked_conv2d(cin, cout, mask_type='B', kernel_size=kernel_size))
         # stream from pixels above
         self.u_stream  = nn.ModuleList([gated_resnet(nr_filters, conv_op, 
                                         resnet_nonlinearity, skip_connection=1) 
@@ -103,18 +125,10 @@ class OurPixelCNN(nn.Module):
                     resnet_nonlinearity='concat_elu', input_channels=3, kernel_size=(5,5),
                     max_dilation=2):
         super(OurPixelCNN, self).__init__()
-        if resnet_nonlinearity == 'concat_elu' : 
+        if resnet_nonlinearity == 'concat_elu':
             self.resnet_nonlinearity = lambda x : concat_elu(x)
-        else : 
+        else:
             raise Exception('right now only concat elu is supported as resnet nonlinearity.')
-
-        self.nr_filters = nr_filters
-        self.input_channels = input_channels
-        self.nr_logistic_mix = nr_logistic_mix
-        self.right_shift_pad = nn.ZeroPad2d((1, 0, 0, 0))
-        self.down_shift_pad  = nn.ZeroPad2d((0, 0, 1, 0))
-
-        assert input_channels == 1  # FIXME: temporary
 
         down_nr_resnet = [nr_resnet] + [nr_resnet + 1] * 2
         self.down_layers = nn.ModuleList([OurPixelCNNLayer_down(down_nr_resnet[i], nr_filters,
@@ -123,25 +137,17 @@ class OurPixelCNN(nn.Module):
         self.up_layers   = nn.ModuleList([OurPixelCNNLayer_up(nr_resnet, nr_filters, 
                                                 self.resnet_nonlinearity, kernel_size=kernel_size) for _ in range(3)])
 
-        # TODO: Dilate convolutions to increase receptive field, as we no longer downsample
-        self.downsize_u_stream = nn.ModuleList([masked_conv2d(nr_filters, nr_filters, mask_type='B', n_color=input_channels,
-                                                kernel_size=kernel_size, dilation=max_dilation) for _ in range(2)])
+        conv_op = lambda cin, cout: wn(masked_conv2d(cin, cout, mask_type='B', kernel_size=kernel_size, dilation=max_dilation))
+        self.downsize_u_stream = nn.ModuleList([conv_op(nr_filters, nr_filters) for _ in range(2)])
+        self.downsize_ul_stream = nn.ModuleList([conv_op(nr_filters, nr_filters) for _ in range(2)])
+        self.upsize_u_stream = nn.ModuleList([conv_op(nr_filters, nr_filters) for _ in range(2)])
+        self.upsize_ul_stream = nn.ModuleList([conv_op(nr_filters, nr_filters) for _ in range(2)])
 
-        self.downsize_ul_stream = nn.ModuleList([masked_conv2d(nr_filters, nr_filters, mask_type='B', n_color=input_channels,
-                                                 kernel_size=kernel_size, dilation=max_dilation) for _ in range(2)])
-        
-        self.upsize_u_stream = nn.ModuleList([masked_conv2d(nr_filters, nr_filters, mask_type='B', n_color=input_channels,
-                                              kernel_size=kernel_size, dilation=max_dilation) for _ in range(2)])
-        
-        self.upsize_ul_stream = nn.ModuleList([masked_conv2d(nr_filters, nr_filters, mask_type='B', n_color=input_channels,
-                                               kernel_size=kernel_size, dilation=max_dilation) for _ in range(2)])
+        # NOTE: In PixelCNN++, u_init can access a 2x3 region above each pixel
+        self.u_init = wn(masked_conv2d(input_channels + 1, nr_filters, mask_type='A', kernel_size=kernel_size))
+        self.ul_init = wn(masked_conv2d(input_channels + 1, nr_filters, mask_type='A', kernel_size=kernel_size))
 
-        # NOTE: In PixelCNN++, u_init can access a 2x3 region above each pixel, while this mask
-        # only accesses a 1x3 region above the pixel and a pixel to the left
-        self.u_init = wn(masked_conv2d(input_channels + 1, nr_filters, mask_type='A', n_color=input_channels, kernel_size=kernel_size))
-        self.ul_init = wn(masked_conv2d(input_channels + 1, nr_filters, mask_type='A', n_color=input_channels, kernel_size=kernel_size))
-
-        num_mix = 3 if self.input_channels == 1 else 10
+        num_mix = 3 if input_channels == 1 else 10
         self.nin_out = nin(nr_filters, num_mix * nr_logistic_mix)
         self.init_padding = None
 
