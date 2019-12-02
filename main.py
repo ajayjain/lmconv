@@ -43,6 +43,8 @@ parser.add_argument('-l', '--lr', type=float,
                     default=0.0002, help='Base learning rate')
 parser.add_argument('-e', '--lr_decay', type=float, default=0.999995,
                     help='Learning rate decay, applied every step of the optimization')
+parser.add_argument('-wd', '--weight_decay', type=float,
+                    default=5e-4, help='Weight decay during optimization')
 parser.add_argument('-c', '--clip', default=100, help='Gradient norms clipped to this value')
 parser.add_argument('-b', '--batch_size', type=int, default=64,
                     help='Batch size during training per GPU')
@@ -62,7 +64,7 @@ args = parser.parse_args()
 torch.manual_seed(args.seed)
 np.random.seed(args.seed)
 
-model_name = 'pcnn_{}_lr{:.5f}_gc{}_nr-resnet{}_nr-filters{}_k{}_bs{}'.format(args.dataset, args.lr, args.clip, args.nr_resnet, args.nr_filters, args.kernel_size, args.batch_size)
+model_name = 'pcnn_{}_lr{:.5f}_wd{}_gc{}_nr-resnet{}_nr-filters{}_k{}_md{}_bs{}'.format(args.dataset, args.lr, args.weight_decay, args.clip, args.nr_resnet, args.nr_filters, args.kernel_size, args.max_dilation, args.batch_size)
 if args.exp_name:
     model_name = f'{model_name}_{args.exp_name}'
 assert not os.path.exists(os.path.join('runs', model_name)), '{} already exists!'.format(model_name)
@@ -114,7 +116,8 @@ if args.load_params:
     # model.load_state_dict(torch.load(args.load_params))
     print('model parameters loaded')
 
-optimizer = optim.Adam(model.parameters(), lr=args.lr)  # NOTE: PixelCNN++ TF repo uses betas=(0.95, 0.9995)
+# NOTE: PixelCNN++ TF repo uses betas=(0.95, 0.9995), different than PyTorch defaults
+optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=args.lr_decay)
 
 def sample(model):
