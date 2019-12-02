@@ -12,13 +12,13 @@ from utils import *
 
 class masked_conv2d(nn.Conv2d):
     def __init__(self, num_filters_in, num_filters_out, kernel_size=(3,3),
-                 mask_type='B', n_color=1):
+                 dilation=1, mask_type='B', n_color=1):
         """2D Convolution with masked weight for Autoregressive connection"""
         # Pad to maintain spatial dimensions
-        padding = (int((kernel_size[0] - 1) / 2),
-                   int((kernel_size[1] - 1) / 2))
+        padding = ((dilation * (kernel_size[0] - 1)) // 2,
+                   (dilation * (kernel_size[1] - 1)) // 2)
         super(masked_conv2d, self).__init__(
-            num_filters_in, num_filters_out, kernel_size, padding=padding)
+            num_filters_in, num_filters_out, kernel_size, padding=padding, dilation=dilation)
         assert mask_type in ['A', 'B']
         assert n_color == 1  # TODO: Add support for color channel masking
         self.mask_type = mask_type
@@ -100,7 +100,8 @@ class OurPixelCNNLayer_down(nn.Module):
 
 class OurPixelCNN(nn.Module):
     def __init__(self, nr_resnet=5, nr_filters=80, nr_logistic_mix=10, 
-                    resnet_nonlinearity='concat_elu', input_channels=3, kernel_size=(5,5)):
+                    resnet_nonlinearity='concat_elu', input_channels=3, kernel_size=(5,5),
+                    max_dilation=2):
         super(OurPixelCNN, self).__init__()
         if resnet_nonlinearity == 'concat_elu' : 
             self.resnet_nonlinearity = lambda x : concat_elu(x)
@@ -124,16 +125,16 @@ class OurPixelCNN(nn.Module):
 
         # TODO: Dilate convolutions to increase receptive field, as we no longer downsample
         self.downsize_u_stream = nn.ModuleList([masked_conv2d(nr_filters, nr_filters, mask_type='B', n_color=input_channels,
-                                                kernel_size=kernel_size) for _ in range(2)])
+                                                kernel_size=kernel_size, dilation=max_dilation) for _ in range(2)])
 
         self.downsize_ul_stream = nn.ModuleList([masked_conv2d(nr_filters, nr_filters, mask_type='B', n_color=input_channels,
-                                                 kernel_size=kernel_size) for _ in range(2)])
+                                                 kernel_size=kernel_size, dilation=max_dilation) for _ in range(2)])
         
         self.upsize_u_stream = nn.ModuleList([masked_conv2d(nr_filters, nr_filters, mask_type='B', n_color=input_channels,
-                                              kernel_size=kernel_size) for _ in range(2)])
+                                              kernel_size=kernel_size, dilation=max_dilation) for _ in range(2)])
         
         self.upsize_ul_stream = nn.ModuleList([masked_conv2d(nr_filters, nr_filters, mask_type='B', n_color=input_channels,
-                                               kernel_size=kernel_size) for _ in range(2)])
+                                               kernel_size=kernel_size, dilation=max_dilation) for _ in range(2)])
 
         # NOTE: In PixelCNN++, u_init can access a 2x3 region above each pixel, while this mask
         # only accesses a 1x3 region above the pixel and a pixel to the left

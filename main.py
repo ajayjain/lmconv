@@ -32,9 +32,7 @@ parser.add_argument('-r', '--load_params', type=str, default=None,
                     help='Restore training from previous model checkpoint?')
 parser.add_argument('--exp_name', type=str, default=None)
 parser.add_argument('--ours', action='store_true')
-# model
-parser.add_argument('-k', '--kernel_size', type=int, default=5,
-                    help='Size of conv kernels')
+# pixelcnn++ and our model
 parser.add_argument('-q', '--nr_resnet', type=int, default=5,
                     help='Number of residual blocks per stage of the model')
 parser.add_argument('-n', '--nr_filters', type=int, default=160,
@@ -52,6 +50,12 @@ parser.add_argument('-x', '--max_epochs', type=int,
                     default=5000, help='How many epochs to run in total?')
 parser.add_argument('-s', '--seed', type=int, default=1,
                     help='Random seed to use')
+# our model
+parser.add_argument('-k', '--kernel_size', type=int, default=5,
+                    help='Size of conv kernels')
+parser.add_argument('-md', '--max_dilation', type=int, default=2,
+                    help='Dilation in downsize stream')
+
 args = parser.parse_args()
 
 # reproducibility
@@ -98,7 +102,7 @@ else :
 if args.ours:
     model = OurPixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
                 input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix,
-                kernel_size=(args.kernel_size, args.kernel_size))
+                kernel_size=(args.kernel_size, args.kernel_size), max_dilation=args.max_dilation)
 else:
     model = PixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
                 input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix)
