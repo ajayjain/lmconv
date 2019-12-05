@@ -1,3 +1,4 @@
+from IPython import embed
 import math
 import pdb
 
@@ -71,10 +72,13 @@ class masked_conv2d(nn.Module):
 
 
 class OurPixelCNNLayer_up(nn.Module):
-    def __init__(self, nr_resnet, nr_filters, resnet_nonlinearity, kernel_size=(5,5)):
+    def __init__(self, nr_resnet, nr_filters, resnet_nonlinearity, kernel_size=(5,5), weight_norm=True):
         super(OurPixelCNNLayer_up, self).__init__()
         self.nr_resnet = nr_resnet
-        conv_op = lambda cin, cout: wn(masked_conv2d(cin, cout, mask_type='B', kernel_size=kernel_size))
+        if weight_norm:
+            conv_op = lambda cin, cout: wn(masked_conv2d(cin, cout, mask_type='B', kernel_size=kernel_size))
+        else:
+            conv_op = lambda cin, cout: masked_conv2d(cin, cout, mask_type='B', kernel_size=kernel_size)
         # stream from pixels above and to the left
         self.u_stream = nn.ModuleList([gated_resnet(nr_filters, conv_op, 
                                         resnet_nonlinearity, skip_connection=0) 
@@ -98,10 +102,13 @@ class OurPixelCNNLayer_up(nn.Module):
 
 
 class OurPixelCNNLayer_down(nn.Module):
-    def __init__(self, nr_resnet, nr_filters, resnet_nonlinearity, kernel_size=(5,5)):
+    def __init__(self, nr_resnet, nr_filters, resnet_nonlinearity, kernel_size=(5,5), weight_norm=True):
         super(OurPixelCNNLayer_down, self).__init__()
         self.nr_resnet = nr_resnet
-        conv_op = lambda cin, cout: wn(masked_conv2d(cin, cout, mask_type='B', kernel_size=kernel_size))
+        if weight_norm:
+            conv_op = lambda cin, cout: wn(masked_conv2d(cin, cout, mask_type='B', kernel_size=kernel_size))
+        else:
+            conv_op = lambda cin, cout: masked_conv2d(cin, cout, mask_type='B', kernel_size=kernel_size)
         # stream from pixels above
         self.u_stream  = nn.ModuleList([gated_resnet(nr_filters, conv_op, 
                                         resnet_nonlinearity, skip_connection=1) 
@@ -123,7 +130,7 @@ class OurPixelCNNLayer_down(nn.Module):
 class OurPixelCNN(nn.Module):
     def __init__(self, nr_resnet=5, nr_filters=80, nr_logistic_mix=10, 
                     resnet_nonlinearity='concat_elu', input_channels=3, kernel_size=(5,5),
-                    max_dilation=2):
+                    max_dilation=2, weight_norm=True):
         super(OurPixelCNN, self).__init__()
         if resnet_nonlinearity == 'concat_elu':
             self.resnet_nonlinearity = lambda x : concat_elu(x)
@@ -132,20 +139,27 @@ class OurPixelCNN(nn.Module):
 
         down_nr_resnet = [nr_resnet] + [nr_resnet + 1] * 2
         self.down_layers = nn.ModuleList([OurPixelCNNLayer_down(down_nr_resnet[i], nr_filters,
-                                                self.resnet_nonlinearity, kernel_size=kernel_size) for i in range(3)])
+                                                self.resnet_nonlinearity, kernel_size=kernel_size, weight_norm=weight_norm) for i in range(3)])
 
         self.up_layers   = nn.ModuleList([OurPixelCNNLayer_up(nr_resnet, nr_filters, 
-                                                self.resnet_nonlinearity, kernel_size=kernel_size) for _ in range(3)])
+                                                self.resnet_nonlinearity, kernel_size=kernel_size, weight_norm=weight_norm) for _ in range(3)])
 
-        conv_op = lambda cin, cout: wn(masked_conv2d(cin, cout, mask_type='B', kernel_size=kernel_size, dilation=max_dilation))
+        if weight_norm:
+            conv_op = lambda cin, cout: wn(masked_conv2d(cin, cout, mask_type='B', kernel_size=kernel_size, dilation=max_dilation))
+        else:
+            conv_op = lambda cin, cout: masked_conv2d(cin, cout, mask_type='B', kernel_size=kernel_size, dilation=max_dilation)
         self.downsize_u_stream = nn.ModuleList([conv_op(nr_filters, nr_filters) for _ in range(2)])
         self.downsize_ul_stream = nn.ModuleList([conv_op(nr_filters, nr_filters) for _ in range(2)])
         self.upsize_u_stream = nn.ModuleList([conv_op(nr_filters, nr_filters) for _ in range(2)])
         self.upsize_ul_stream = nn.ModuleList([conv_op(nr_filters, nr_filters) for _ in range(2)])
 
         # NOTE: In PixelCNN++, u_init can access a 2x3 region above each pixel
-        self.u_init = wn(masked_conv2d(input_channels + 1, nr_filters, mask_type='A', kernel_size=kernel_size))
-        self.ul_init = wn(masked_conv2d(input_channels + 1, nr_filters, mask_type='A', kernel_size=kernel_size))
+        if weight_norm:
+            self.u_init = wn(masked_conv2d(input_channels + 1, nr_filters, mask_type='A', kernel_size=kernel_size))
+            self.ul_init = wn(masked_conv2d(input_channels + 1, nr_filters, mask_type='A', kernel_size=kernel_size))
+        else:
+            self.u_init = masked_conv2d(input_channels + 1, nr_filters, mask_type='A', kernel_size=kernel_size)
+            self.ul_init = masked_conv2d(input_channels + 1, nr_filters, mask_type='A', kernel_size=kernel_size)
 
         num_mix = 3 if input_channels == 1 else 10
         self.nin_out = nin(nr_filters, num_mix * nr_logistic_mix)
@@ -194,6 +208,10 @@ class OurPixelCNN(nn.Module):
                 ul = self.upsize_ul_stream[i](ul)
 
         x_out = self.nin_out(F.elu(ul))
+
+        if not torch.isfinite(x_out).all().cpu().item():
+            print("ERROR: NaN or Inf in returned tensor, embedding")
+            embed()
 
         assert len(u_list) == len(ul_list) == 0, pdb.set_trace()
 

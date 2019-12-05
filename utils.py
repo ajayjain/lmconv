@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from torch.nn.utils import weight_norm as wn
+# from torch.nn.utils import weight_norm as wn
 import numpy as np
 
 
@@ -95,7 +95,7 @@ def discretized_mix_logistic_loss(x, l):
     cond             = (x < -0.999).float()
     log_probs        = cond * log_cdf_plus + (1. - cond) * inner_out
     log_probs        = torch.sum(log_probs, dim=3) + log_prob_from_logits(logit_probs)
-    
+
     return -torch.sum(log_sum_exp(log_probs))
 
 
@@ -143,6 +143,7 @@ def discretized_mix_logistic_loss_1d(x, l):
     log_probs        = cond * log_cdf_plus + (1. - cond) * inner_out
     log_probs        = torch.sum(log_probs, dim=3) + log_prob_from_logits(logit_probs)
     
+    print("-LSE:", -log_sum_exp(log_probs).sum(dim=1).sum(dim=1))
     return -torch.sum(log_sum_exp(log_probs))
 
 

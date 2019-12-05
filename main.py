@@ -1,6 +1,7 @@
 import time
 import os
 import argparse
+from IPython import embed
 
 from PIL import Image
 from tqdm import tqdm
@@ -45,7 +46,7 @@ parser.add_argument('-e', '--lr_decay', type=float, default=0.999995,
                     help='Learning rate decay, applied every step of the optimization')
 parser.add_argument('-wd', '--weight_decay', type=float,
                     default=5e-4, help='Weight decay during optimization')
-parser.add_argument('-c', '--clip', default=100, help='Gradient norms clipped to this value')
+parser.add_argument('-c', '--clip', type=float, default=-1, help='Gradient norms clipped to this value')
 parser.add_argument('-b', '--batch_size', type=int, default=64,
                     help='Batch size during training per GPU')
 parser.add_argument('-x', '--max_epochs', type=int,
@@ -57,6 +58,9 @@ parser.add_argument('-k', '--kernel_size', type=int, default=5,
                     help='Size of conv kernels')
 parser.add_argument('-md', '--max_dilation', type=int, default=2,
                     help='Dilation in downsize stream')
+parser.add_argument('--normalization', type=str, default='weight_norm')
+parser.add_argument('-af', '--accum_freq', type=int, default=1,
+                    help='Batches per optimization step. Used for gradient accumulation')
 
 args = parser.parse_args()
 
@@ -69,6 +73,10 @@ if args.exp_name:
     model_name = f'{model_name}_{args.exp_name}'
 assert not os.path.exists(os.path.join('runs', model_name)), '{} already exists!'.format(model_name)
 writer = SummaryWriter(log_dir=os.path.join('runs', model_name))
+
+print("Model name:", model_name)
+print("Args:")
+print(args)
 
 sample_batch_size = 25
 obs = (1, 28, 28) if 'mnist' in args.dataset else (3, 32, 32)
@@ -86,6 +94,7 @@ if 'mnist' in args.dataset :
     test_loader  = torch.utils.data.DataLoader(datasets.MNIST(args.data_dir, train=False, 
                     transform=ds_transforms), batch_size=args.batch_size, shuffle=True, **kwargs)
 
+    print("discretized_mix_logistic_loss_1d")
     loss_op   = lambda real, fake : discretized_mix_logistic_loss_1d(real, fake)
     sample_op = lambda x : sample_from_discretized_mix_logistic_1d(x, args.nr_logistic_mix)
 
@@ -96,15 +105,19 @@ elif 'cifar' in args.dataset :
     test_loader  = torch.utils.data.DataLoader(datasets.CIFAR10(args.data_dir, train=False, 
                     transform=ds_transforms), batch_size=args.batch_size, shuffle=True, **kwargs)
 
+    print("discretized_mix_logistic_loss")
     loss_op   = lambda real, fake : discretized_mix_logistic_loss(real, fake)
     sample_op = lambda x : sample_from_discretized_mix_logistic(x, args.nr_logistic_mix)
 else :
     raise Exception('{} dataset not in {mnist, cifar10}'.format(args.dataset))
 
+assert args.normalization in ['weight_norm', 'none']
+
 if args.ours:
     model = OurPixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
                 input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix,
-                kernel_size=(args.kernel_size, args.kernel_size), max_dilation=args.max_dilation)
+                kernel_size=(args.kernel_size, args.kernel_size), max_dilation=args.max_dilation,
+                weight_norm=(args.normalization == 'weight_norm'))
 else:
     model = PixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
                 input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix)
@@ -140,28 +153,63 @@ for epoch in range(args.max_epochs):
     model.train()
     for batch_idx, (input,_) in enumerate(tqdm(train_loader, desc=f"Train epoch {epoch}")):
         input = input.cuda(non_blocking=True)
+
+        if not torch.isfinite(input).all().cpu().item():
+            print("ERROR: main.py: NaN or Inf in input, embedding")
+            embed()
+
         output = model(input)
+
+        if not torch.isfinite(output).all().cpu().item():
+            print("ERROR: main.py: NaN or Inf in returned tensor, embedding")
+            embed()
+
         loss = loss_op(input, output)
-        optimizer.zero_grad()
+
+        if not torch.isfinite(loss).all().cpu().item():
+            print("ERROR: main.py: NaN or Inf in loss, embedding")
+            embed()
+
+        if batch_idx % args.accum_freq == 0:
+            optimizer.zero_grad()
         loss.backward()
-        gradient_norm = nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-        writer.add_scalar('train/gradient_norm', gradient_norm, global_step)
-        optimizer.step()
+        if (batch_idx + 1) % args.accum_freq == 0:
+            if args.clip > 0:
+                # Compute and rescale gradient norm
+                print("WARN: clipping gradients")
+                gradient_norm = nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+            else:
+                # Just compute the gradient norm
+                parameters = list(filter(lambda p: p.grad is not None, model.parameters()))
+                gradient_norm = 0
+                for p in parameters:
+                    param_norm = p.grad.data.norm(2)
+                    gradient_norm += param_norm.item() ** 2
+                gradient_norm = gradient_norm ** (1. / 2)
+            writer.add_scalar('train/gradient_norm', gradient_norm, global_step)
+            optimizer.step()
         train_loss += loss.item()
 
         deno = args.batch_size * np.prod(obs) * np.log(2.)
+        assert deno > 0, embed()
         writer.add_scalar('train/bpd', (loss.item() / deno), global_step)
+
+        if batch_idx >= 100 and (loss.item() / deno) >= 10:
+            print("WARNING: main.py: large batch loss {} bpd".format(loss.item() / deno))
+            # pdb.set_trace()
 
         if (batch_idx + 1) % args.print_every == 0: 
             deno = args.print_every * args.batch_size * np.prod(obs) * np.log(2.)
-            print('loss : {:.4f}, time : {:.4f}, global step: {}'.format(
-                (train_loss / deno), 
+            print('train bpd : {:.4f}, train loss : {:.1f}, time : {:.4f}, global step: {}'.format(
+                (train_loss / deno),
+                train_loss,
                 (time.time() - time_),
                 global_step))
             train_loss = 0.
             time_ = time.time()
 
-        global_step += 1
+        if (batch_idx + 1) % args.accum_freq == 0:
+            global_step += 1
 
     # decrease learning rate
     scheduler.step()
@@ -174,10 +222,16 @@ for epoch in range(args.max_epochs):
             input_var = Variable(input)
             output = model(input_var)
             loss = loss_op(input_var, output)
+    
+            if not torch.isfinite(loss).all().cpu().item():
+                print("ERROR: main.py: NaN or Inf in test loss in test loop, embedding")
+                embed()
+
             test_loss += loss.item()
             del loss, output
 
         deno = batch_idx * args.batch_size * np.prod(obs) * np.log(2.)
+        assert deno > 0, embed()
         test_loss = test_loss / deno
         writer.add_scalar('test/bpd', test_loss, global_step)
         print('test loss : %s' % test_loss)
