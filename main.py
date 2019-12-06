@@ -61,6 +61,7 @@ parser.add_argument('-md', '--max_dilation', type=int, default=2,
 parser.add_argument('--normalization', type=str, default='weight_norm')
 parser.add_argument('-af', '--accum_freq', type=int, default=1,
                     help='Batches per optimization step. Used for gradient accumulation')
+parser.add_argument('--two_stream', action="store_true", help="Enable two stream model")
 
 args = parser.parse_args()
 
@@ -117,7 +118,8 @@ if args.ours:
     model = OurPixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
                 input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix,
                 kernel_size=(args.kernel_size, args.kernel_size), max_dilation=args.max_dilation,
-                weight_norm=(args.normalization == 'weight_norm'))
+                weight_norm=(args.normalization == 'weight_norm'),
+                two_stream=args.two_stream)
 else:
     model = PixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
                 input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix)
@@ -176,8 +178,11 @@ for epoch in range(args.max_epochs):
         if (batch_idx + 1) % args.accum_freq == 0:
             if args.clip > 0:
                 # Compute and rescale gradient norm
-                print("WARN: clipping gradients")
                 gradient_norm = nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+                if gradient_norm > args.clip:
+                    print("WARN: Clipped gradients")
+                else:
+                    print("No need to clip gradients")
             else:
                 # Just compute the gradient norm
                 parameters = list(filter(lambda p: p.grad is not None, model.parameters()))
