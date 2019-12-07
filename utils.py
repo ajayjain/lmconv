@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-# from torch.nn.utils import weight_norm as wn
 import numpy as np
 
 
@@ -267,3 +266,40 @@ def load_part_of_model(model, path):
                 print(e)
                 pass
     print('added %s of params:' % (added / float(len(model.state_dict().keys()))))
+
+
+def get_input_mask_raster_scan(kernel_size, num_patches, mask_type='B'):
+    """Generate mask for unfolded input image according to raster scan (row-major)
+    autoregressive generation ordering.
+
+    Args:
+        kernel_size (int or Tuple[int, int]): kernel size of corresponding convolution.
+                                              Influences rows in mask (ie patch size)
+        num_patches (int): width of unfolded input, corresponding to the number of
+                           locations a convolution will be applied. Generally equal
+                           to H * W if appropriate padding is applied to the input
+                           image before unfolding.
+        mask_type (str): A or B, determining whether the center pixel can be conditioned
+                         upon.
+
+    Returns: Mask of shape 1 x (kernel_size^2) x num_patches,
+             type torch.tensor(dtype=float)
+    """
+    if hasattr(kernel_size, "__iter__"):
+        assert kernel_size[0] == kernel_size[1]
+        kernel_size = kernel_size[0]
+
+    assert kernel_size == 3, "Only kernel size 3 supported"
+    assert mask_type in ["A", "B"]
+    
+    if mask_type == "A":
+        col_mask_chunk = torch.tensor([1, 1, 1,
+                                       1, 0, 0,
+                                       0, 0, 0], dtype=torch.uint8)
+    else:
+        col_mask_chunk = torch.tensor([1, 1, 1,
+                                       1, 1, 0,
+                                       0, 0, 0], dtype=torch.uint8)
+
+    inp_mask = col_mask_chunk.unsqueeze(1).repeat(1, num_patches)
+    return inp_mask.unsqueeze(0).float()

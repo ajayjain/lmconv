@@ -62,6 +62,8 @@ parser.add_argument('--normalization', type=str, default='weight_norm')
 parser.add_argument('-af', '--accum_freq', type=int, default=1,
                     help='Batches per optimization step. Used for gradient accumulation')
 parser.add_argument('--two_stream', action="store_true", help="Enable two stream model")
+parser.add_argument('--order', type=str, choices=["raster_scan"],
+                    help="Autoregressive generation order")
 
 args = parser.parse_args()
 
@@ -115,14 +117,27 @@ else :
 assert args.normalization in ['weight_norm', 'none']
 
 if args.ours:
+    ks = (args.kernel_size, args.kernel_size)
     model = OurPixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
                 input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix,
-                kernel_size=(args.kernel_size, args.kernel_size), max_dilation=args.max_dilation,
-                weight_norm=(args.normalization == 'weight_norm'),
+                kernel_size=ks, max_dilation=args.max_dilation,
+                weight_norm=(args.normalization == "weight_norm"),
                 two_stream=args.two_stream)
+
+    # Make masks
+    assert args.order == "raster_scan"
+    mask_init = get_input_mask_raster_scan(kernel_size=ks, num_patches=obs[1] * obs[2], mask_type='A')
+    mask_init = mask_init.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
+    print("mask_init", mask_init.shape)
+
+    mask = get_input_mask_raster_scan(kernel_size=ks, num_patches=obs[1] * obs[2], mask_type='B')
+    mask = mask.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
+    print("mask", mask.shape)
 else:
     model = PixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
                 input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix)
+    mask_init = None
+    mask = None
 model = nn.DataParallel(model)
 model = model.cuda()
 
@@ -142,13 +157,15 @@ def sample(model):
     for i in range(obs[1]):
         for j in range(obs[2]):
             data_v = Variable(data)
-            out   = model(data_v, sample=True)
+            out = model(data_v, sample=True, mask_init=mask_init, mask=mask)
             out_sample = sample_op(out)
             data[:, :, i, j] = out_sample.data[:, :, i, j]
     return data
 
 print('starting training')
 global_step = 0
+min_train_bpd = 1e12
+min_test_bpd = 1e12
 for epoch in range(args.max_epochs):
     train_loss = 0.
     time_ = time.time()
@@ -160,7 +177,7 @@ for epoch in range(args.max_epochs):
             print("ERROR: main.py: NaN or Inf in input, embedding")
             embed()
 
-        output = model(input)
+        output = model(input, mask_init=mask_init, mask=mask)
 
         if not torch.isfinite(output).all().cpu().item():
             print("ERROR: main.py: NaN or Inf in returned tensor, embedding")
@@ -197,7 +214,10 @@ for epoch in range(args.max_epochs):
 
         deno = args.batch_size * np.prod(obs) * np.log(2.)
         assert deno > 0, embed()
-        writer.add_scalar('train/bpd', (loss.item() / deno), global_step)
+        train_bpd = loss.item() / deno
+        writer.add_scalar('train/bpd', train_bpd, global_step)
+        min_train_bpd = min(min_train_bpd, train_bpd)
+        writer.add_scalar('train/min_bpd', min_train_bpd, global_step)
 
         if batch_idx >= 100 and (loss.item() / deno) >= 10:
             print("WARNING: main.py: large batch loss {} bpd".format(loss.item() / deno))
@@ -225,7 +245,7 @@ for epoch in range(args.max_epochs):
         for batch_idx, (input,_) in enumerate(tqdm(test_loader, desc=f"Test epoch {epoch}")):
             input = input.cuda(non_blocking=True)
             input_var = Variable(input)
-            output = model(input_var)
+            output = model(input_var, mask_init=mask_init, mask=mask)
             loss = loss_op(input_var, output)
     
             if not torch.isfinite(loss).all().cpu().item():
@@ -237,16 +257,21 @@ for epoch in range(args.max_epochs):
 
         deno = batch_idx * args.batch_size * np.prod(obs) * np.log(2.)
         assert deno > 0, embed()
-        test_loss = test_loss / deno
-        writer.add_scalar('test/bpd', test_loss, global_step)
-        print('test loss : %s' % test_loss)
+        test_bpd = test_loss / deno
+        writer.add_scalar('test/bpd', test_bpd, global_step)
+        min_test_bpd = min(min_test_bpd, test_bpd)
+        writer.add_scalar('test/min_bpd', min_test_bpd, global_step)
+        print('test loss : %s' % test_bpd)
 
         if (epoch + 1) % args.save_interval == 0: 
             torch.save({
                 "epoch": epoch,
-                "test_loss": test_loss,
+                "test_loss": test_bpd,
                 "model_state_dict": model.module.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict()
+                "optimizer_state_dict": optimizer.state_dict(),
+                "args": vars(args),
+                "mask_init": mask_init,
+                "mask": mask
             }, 'models/{}_{}.pth'.format(model_name, epoch))
 
             print('sampling...')
