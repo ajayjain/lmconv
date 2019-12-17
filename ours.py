@@ -91,8 +91,8 @@ class OurPixelCNN(nn.Module):
 
         if weight_norm:
             conv_op_init = lambda cin, cout: wn(input_masked_conv2d(cin, cout, kernel_size=kernel_size))
-            conv_op_dilated = lambda cin, cout: wn(input_masked_conv2d(cin, cout, kernel_size=kernel_size))
-            conv_op = lambda cin, cout: wn(input_masked_conv2d(cin, cout, kernel_size=kernel_size, dilation=max_dilation))
+            conv_op_dilated = lambda cin, cout: wn(input_masked_conv2d(cin, cout, kernel_size=kernel_size, dilation=max_dilation))
+            conv_op = lambda cin, cout: wn(input_masked_conv2d(cin, cout, kernel_size=kernel_size))
         else:
             conv_op_init = lambda cin, cout: input_masked_conv2d(cin, cout, kernel_size=kernel_size)
             conv_op_dilated = lambda cin, cout: input_masked_conv2d(cin, cout, kernel_size=kernel_size, dilation=max_dilation)
