@@ -10,7 +10,7 @@ def concat_elu(x):
     """ like concatenated ReLU (http://arxiv.org/abs/1603.05201), but then with ELU """
     # Pytorch ordering
     axis = len(x.size()) - 3
-    return F.elu(torch.cat([x, -x], dim=axis))
+    return F.elu(torch.cat([x, -x], dim=axis), inplace=True)
 
 
 def log_sum_exp(x):
@@ -302,4 +302,4 @@ def get_input_mask_raster_scan(kernel_size, num_patches, mask_type='B'):
                                        0, 0, 0], dtype=torch.uint8)
 
     inp_mask = col_mask_chunk.unsqueeze(1).repeat(1, num_patches)
-    return inp_mask.unsqueeze(0).float()
+    return inp_mask.unsqueeze(0)

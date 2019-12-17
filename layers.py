@@ -243,15 +243,19 @@ class input_masked_conv2d(nn.Module):
         x_unf = F.unfold(x_pad, self.kernel_size)
 
         if mask is not None:
-            # Repeat mask from 1x(k*k)xnum_patches to 1x(C*k*k)xnum_patches
+            # Option 1: Repeat mask from 1x(k*k)xnum_patches to 1x(C*k*k)xnum_patches
             # mask_repeat = mask.repeat(1, x.size(1), 1)
             # x_unf = x_unf * mask_repeat
 
-            # Avoid repeating mask in_channels times by reshaping x_unf (memory efficient)
+            # Option 2: Repeat mask, replace values in place (slow, memory inefficient)
+            # mask_repeat = mask.repeat(x.size(0), x.size(1), 1)
+            # x_unf[mask_repeat == 1] = 0
+
+            # Option 3: Avoid repeating mask in_channels times by reshaping x_unf (memory efficient)
             C = x.size(1)
             assert x_unf.size(1) % C == 0
             x_unf_channels_batched = x_unf.view(x_unf.size(0) * C, x_unf.size(1) // C, x_unf.size(2))
-            x_unf = (x_unf_channels_batched * mask).view(x_unf.shape)
+            x_unf = torch.mul(x_unf_channels_batched, mask).view(x_unf.shape)
         else:
             print("WARN: input_masked_conv2d not provided mask, not masking!")
 
