@@ -102,8 +102,8 @@ class PixelCNN(nn.Module):
         self.init_padding = None
 
 
-    def forward(self, x, sample=False, mask_init=None, mask=None):
-        assert mask_init is None and mask is None, "PixelCNN++ does not use input masking"
+    def forward(self, x, sample=False, mask_init=None, mask_undilated=None, mask_dilated=None):
+        assert mask_init is None and mask_undilated is None and mask_dilated is None, "PixelCNN++ does not use input masking"
         # similar as done in the tf repo :  
         if self.init_padding is None and not sample: 
             xs = [int(y) for y in x.size()]

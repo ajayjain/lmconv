@@ -62,7 +62,7 @@ parser.add_argument('--normalization', type=str, default='weight_norm')
 parser.add_argument('-af', '--accum_freq', type=int, default=1,
                     help='Batches per optimization step. Used for gradient accumulation')
 parser.add_argument('--two_stream', action="store_true", help="Enable two stream model")
-parser.add_argument('--order', type=str, choices=["raster_scan"],
+parser.add_argument('--order', type=str, choices=["raster_scan", "s_curve", "hilbert"],
                     help="Autoregressive generation order")
 
 args = parser.parse_args()
@@ -124,20 +124,26 @@ if args.ours:
                 weight_norm=(args.normalization == "weight_norm"),
                 two_stream=args.two_stream)
 
-    # Make masks
-    assert args.order == "raster_scan"
-    mask_init = get_input_mask_raster_scan(kernel_size=ks, num_patches=obs[1] * obs[2], mask_type='A')
+    # Make masks, copy to GPU and repeat along batch for DataParallel
+    generation_idx = get_generation_order_idx(args.order, obs[1], obs[2])
+    mask_init = get_unfolded_masks(generation_idx, obs[1], obs[2], k=args.kernel_size, dilation=1, mask_type='A')
     mask_init = mask_init.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
-    print("mask_init", mask_init.shape)
 
-    mask = get_input_mask_raster_scan(kernel_size=ks, num_patches=obs[1] * obs[2], mask_type='B')
-    mask = mask.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
-    print("mask", mask.shape)
+    mask_undilated = get_unfolded_masks(generation_idx, obs[1], obs[2], k=args.kernel_size, dilation=1, mask_type='B')
+    mask_undilated = mask_undilated.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
+
+    if args.max_dilation == 1:
+        mask_dilated = mask_undilated
+    else:
+        mask_dilated = get_unfolded_masks(generation_idx, obs[1], obs[2], k=args.kernel_size, dilation=args.max_dilation, mask_type='B')
+        mask_dilated = mask_dilated.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
+
+    print(f"Mask shapes: {mask_init.shape}, {mask_undilated.shape}, {mask_dilated.shape}")
 else:
+    assert False
     model = PixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
                 input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix)
-    mask_init = None
-    mask = None
+    mask_init, mask_undilated, mask_dilated = None, None, None
 model = nn.DataParallel(model)
 model = model.cuda()
 
@@ -157,7 +163,7 @@ def sample(model):
     for i in range(obs[1]):
         for j in range(obs[2]):
             data_v = Variable(data)
-            out = model(data_v, sample=True, mask_init=mask_init, mask=mask)
+            out = model(data_v, sample=True, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
             out_sample = sample_op(out)
             data[:, :, i, j] = out_sample.data[:, :, i, j]
     return data
@@ -177,7 +183,7 @@ for epoch in range(args.max_epochs):
             print("ERROR: main.py: NaN or Inf in input, embedding")
             embed()
 
-        output = model(input, mask_init=mask_init, mask=mask)
+        output = model(input, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
 
         if not torch.isfinite(output).all().cpu().item():
             print("ERROR: main.py: NaN or Inf in returned tensor, embedding")
@@ -245,7 +251,7 @@ for epoch in range(args.max_epochs):
         for batch_idx, (input,_) in enumerate(tqdm(test_loader, desc=f"Test epoch {epoch}")):
             input = input.cuda(non_blocking=True)
             input_var = Variable(input)
-            output = model(input_var, mask_init=mask_init, mask=mask)
+            output = model(input_var, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
             loss = loss_op(input_var, output)
     
             if not torch.isfinite(loss).all().cpu().item():

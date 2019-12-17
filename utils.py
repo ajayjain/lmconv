@@ -268,6 +268,10 @@ def load_part_of_model(model, path):
     print('added %s of params:' % (added / float(len(model.state_dict().keys()))))
 
 
+###################
+# Masking utilities
+###################
+
 def get_input_mask_raster_scan(kernel_size, num_patches, mask_type='B'):
     """Generate mask for unfolded input image according to raster scan (row-major)
     autoregressive generation ordering.
@@ -303,3 +307,70 @@ def get_input_mask_raster_scan(kernel_size, num_patches, mask_type='B'):
 
     inp_mask = col_mask_chunk.unsqueeze(1).repeat(1, num_patches)
     return inp_mask.unsqueeze(0)
+
+def raster_scan_idx(rows, cols):
+    """Return indices of a raster scan"""
+    idx = []
+    for r in range(rows):
+        for c in range(cols):
+            idx.append((r, c))
+    return np.array(idx)
+
+def s_curve_idx(rows, cols):
+    """Generate S shape curve"""
+    idx = []
+    for r in range(rows):
+        col_idx = range(cols) if r % 2 == 0 else range(cols-1, -1, -1)
+        for c in col_idx:
+            idx.append((r, c))
+    return np.array(idx)
+
+def hilbert_idx(rows, cols):
+    assert rows == cols, "Image must be square for Hilbert curve"
+    assert (rows > 0 and (rows & (rows - 1)) == 0), "Must have power-of-two sized image"
+    order = int(np.log2(rows))
+    curve = HilbertCurve(order, 2)
+    idx = np.zeros((rows * cols, 2), dtype=np.int)
+    for i in range(rows * cols):
+        coords = curve.coordinates_from_distance(i) # cols, then rows
+        idx[i, 0] = coords[1]
+        idx[i, 1] = coords[0]
+    return idx
+
+def get_generation_order_idx(order: str, rows: int, cols: int):
+    """Get (rows*cols) x 2 np array given order that pixels are generated"""
+    assert order in ["raster_scan", "s_curve", "hilbert"]
+    return eval(f"{order}_idx")(rows, cols)
+
+def kernel_masks(generation_order_idx: np.ndarray, nrows, ncols, k=3,
+                 dilation=1, mask_type='B', set_padding=0) -> np.ndarray:
+    """Generate kernel masks given a pixel generation order."""
+    assert k % 2 == 1, "Only odd sized kernels are implemented"
+    half_k = int(k / 2)
+    n = len(generation_order_idx)
+    masks = np.zeros((n, k, k))
+    locs_generated = set()
+    for i, (r, c) in enumerate(generation_order_idx):
+        for dr in range(-half_k, half_k+1):
+            for dc in range(-half_k, half_k+1):
+                loc = (r + dr * dilation, c + dc * dilation)
+                can_condition = loc in locs_generated
+                if can_condition:
+                    # The desired location has either been generated,
+                    # so we can condition on it
+                    masks[i, half_k + dr, half_k + dc] = 1
+                elif not (0 <= loc[0] < nrows and 0 <= loc[1] < ncols):
+                    masks[i, half_k + dr, half_k + dc] = set_padding
+        locs_generated.add((r, c))
+
+    if mask_type == 'B':
+        masks[:, half_k, half_k] = 1
+
+    return masks
+
+def get_unfolded_masks(generation_order_idx, nrows, ncols, k=3, dilation=1, mask_type='B'):
+    assert mask_type in ['A', 'B']
+    masks = kernel_masks(generation_order_idx, nrows, ncols, k, dilation, mask_type, set_padding=0)
+    masks = torch.tensor(masks, dtype=torch.float)
+    masks_unf = masks.view(1, nrows * ncols, -1).transpose(1, 2)
+    return masks_unf
