@@ -62,7 +62,7 @@ parser.add_argument('--normalization', type=str, default='weight_norm')
 parser.add_argument('-af', '--accum_freq', type=int, default=1,
                     help='Batches per optimization step. Used for gradient accumulation')
 parser.add_argument('--two_stream', action="store_true", help="Enable two stream model")
-parser.add_argument('--order', type=str, choices=["raster_scan", "s_curve", "hilbert"],
+parser.add_argument('--order', type=str, choices=["raster_scan", "s_curve", "hilbert", "gilbert2d"],
                     help="Autoregressive generation order")
 
 args = parser.parse_args()

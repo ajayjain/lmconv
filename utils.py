@@ -1,9 +1,12 @@
 import pdb
+
 import torch 
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np
+
+from gilbert2d import gilbert2d_idx
 
 
 def concat_elu(x):
@@ -339,7 +342,7 @@ def hilbert_idx(rows, cols):
 
 def get_generation_order_idx(order: str, rows: int, cols: int):
     """Get (rows*cols) x 2 np array given order that pixels are generated"""
-    assert order in ["raster_scan", "s_curve", "hilbert"]
+    assert order in ["raster_scan", "s_curve", "hilbert", "gilbert2d"]
     return eval(f"{order}_idx")(rows, cols)
 
 def kernel_masks(generation_order_idx: np.ndarray, nrows, ncols, k=3,
