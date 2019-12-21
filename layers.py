@@ -1,11 +1,19 @@
-from utils import * 
+import math
 import pdb
+
 import torch 
 import torch.nn as nn
+from torch.nn.parameter import Parameter
 import torch.nn.functional as F
 from torch.autograd import Variable
-from torch.nn.utils import weight_norm as wn
 import numpy as np
+
+from utils import * 
+
+# DEBUG TO REMOVE WEIGHT NORMALIZATION
+# from torch.nn.utils import weight_norm as wn
+def wn(op):
+    return op
 
 class nin(nn.Module):
     def __init__(self, dim_in, dim_out):
@@ -131,13 +139,136 @@ class gated_resnet(nn.Module):
         self.conv_out = conv_op(2 * num_filters, 2 * num_filters)
 
 
-    def forward(self, og_x, a=None):
-        x = self.conv_input(self.nonlinearity(og_x))
+    def forward(self, og_x, a=None, mask=None):
+        x = self.conv_input(self.nonlinearity(og_x), mask=mask)
         if a is not None : 
             x += self.nin_skip(self.nonlinearity(a))
         x = self.nonlinearity(x)
         x = self.dropout(x)
-        x = self.conv_out(x)
+        x = self.conv_out(x, mask=mask)
         a, b = torch.chunk(x, 2, dim=1)
         c3 = a * torch.sigmoid(b)
         return og_x + c3
+
+
+class masked_conv2d(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=(3,3),
+                 dilation=1, mask_type='B'):
+        """2D Convolution with masked weight for autoregressive connection"""
+        super(masked_conv2d, self).__init__()
+        assert mask_type in ['A', 'B']
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.dilation = dilation
+        self.mask_type = mask_type
+
+        # Pad to maintain spatial dimensions
+        self.padding = ((dilation * (kernel_size[0] - 1)) // 2,
+                   (dilation * (kernel_size[1] - 1)) // 2)
+
+        # Conv parameters
+        self.weight = Parameter(torch.Tensor(out_channels, in_channels, *kernel_size))
+        self.bias = Parameter(torch.Tensor(out_channels))
+
+        # Mask
+        #         -------------------------------------
+        #        |  1       1       1       1       1 |
+        #        |  1       1       1       1       1 |
+        #        |  1       1    1 if B     0       0 |   H // 2
+        #        |  0       0       0       0       0 |   H // 2 + 1
+        #        |  0       0       0       0       0 |
+        #         -------------------------------------
+        #  index    0       1     W//2    W//2+1
+        assert self.weight.size(0) == out_channels
+        assert self.weight.size(1) == in_channels
+        assert self.weight.size(2) == kernel_size[0]
+        assert self.weight.size(3) == kernel_size[1]
+        mask = torch.ones(out_channels, in_channels, kernel_size[0], kernel_size[1])
+        yc = kernel_size[0] // 2
+        xc = kernel_size[1] // 2
+        mask[:, :, yc, xc:] = 0
+        mask[:, :, yc + 1:] = 0
+        if mask_type == 'B':
+            mask[:, :, yc, xc] = 1
+        self.register_buffer('mask', mask)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        # From PyTorch _ConvNd implementation
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
+            bound = 1 / math.sqrt(fan_in)
+            nn.init.uniform_(self.bias, -bound, bound)
+
+    def forward(self, x):
+        masked_weight = self.weight * self.mask
+        return F.conv2d(x, masked_weight, self.bias, padding=self.padding, dilation=self.dilation)
+
+
+class input_masked_conv2d(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=(3,3), dilation=1):
+        super(input_masked_conv2d, self).__init__()
+        assert dilation == 1
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.dilation = dilation
+
+        # Pad to maintain spatial dimensions
+        pad0 = (dilation * (kernel_size[0] - 1)) // 2
+        pad1 = (dilation * (kernel_size[1] - 1)) // 2
+        self.padding = (pad0, pad0, pad1, pad1)
+        
+        # Conv parameters
+        self.weight = Parameter(torch.Tensor(out_channels, in_channels, *kernel_size))
+        self.bias = Parameter(torch.Tensor(out_channels))
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        # From PyTorch _ConvNd implementation
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
+            bound = 1 / math.sqrt(fan_in)
+            nn.init.uniform_(self.bias, -bound, bound)
+
+    def forward(self, x, mask=None):
+        assert len(x.shape) == 4, "Unfold/fold only support 4D batched image-like tensors"
+
+        x_pad = torch.nn.functional.pad(x, self.padding)
+        x_unf = F.unfold(x_pad, self.kernel_size)
+
+        if mask is not None:
+            # Option 1: Repeat mask from 1x(k*k)xnum_patches to 1x(C*k*k)xnum_patches
+            # mask_repeat = mask.repeat(1, x.size(1), 1)
+            # x_unf = x_unf * mask_repeat
+
+            # Option 2: Repeat mask, replace values in place (slow, memory inefficient)
+            # mask_repeat = mask.repeat(x.size(0), x.size(1), 1)
+            # x_unf[mask_repeat == 1] = 0
+
+            # Option 3: Avoid repeating mask in_channels times by reshaping x_unf (memory efficient)
+            C = x.size(1)
+            assert x_unf.size(1) % C == 0
+            x_unf_channels_batched = x_unf.view(x_unf.size(0) * C, x_unf.size(1) // C, x_unf.size(2))
+            x_unf = torch.mul(x_unf_channels_batched, mask).view(x_unf.shape)
+        else:
+            print("WARN: input_masked_conv2d not provided mask, not masking!")
+
+        # Perform convolution via matrix multiplication and addition
+        weight_matrix = self.weight.view(self.out_channels, -1)
+        out_unf = torch.einsum('ij,bjk->bik', weight_matrix, x_unf)
+        # out_unf = weight_matrix.matmul(x_unf)
+        # out_unf = x_unf.transpose(1, 2).matmul(weight_matrix.t()).transpose(1, 2)   # Note: equivalent to weight_matrix.matmul(x_unf), but
+                                                                                    # transposed version is faster via timeit test on cpu
+        out_unf = out_unf + self.bias.unsqueeze(0).unsqueeze(2)
+
+        # Output shape is preserved due to input padding
+        output_shape = (x.shape[2], x.shape[3])
+        out = F.fold(out_unf, output_shape, (1, 1))
+
+        return out

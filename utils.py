@@ -1,17 +1,15 @@
-import pdb
+import numpy as np
 import torch 
+from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.autograd import Variable
-from torch.nn.utils import weight_norm as wn
-import numpy as np
 
 
 def concat_elu(x):
     """ like concatenated ReLU (http://arxiv.org/abs/1603.05201), but then with ELU """
     # Pytorch ordering
     axis = len(x.size()) - 3
-    return F.elu(torch.cat([x, -x], dim=axis))
+    return F.elu(torch.cat([x, -x], dim=axis), inplace=True)
 
 
 def log_sum_exp(x):
@@ -95,7 +93,7 @@ def discretized_mix_logistic_loss(x, l):
     cond             = (x < -0.999).float()
     log_probs        = cond * log_cdf_plus + (1. - cond) * inner_out
     log_probs        = torch.sum(log_probs, dim=3) + log_prob_from_logits(logit_probs)
-    
+
     return -torch.sum(log_sum_exp(log_probs))
 
 
@@ -143,6 +141,7 @@ def discretized_mix_logistic_loss_1d(x, l):
     log_probs        = cond * log_cdf_plus + (1. - cond) * inner_out
     log_probs        = torch.sum(log_probs, dim=3) + log_prob_from_logits(logit_probs)
     
+    print("-LSE:", -log_sum_exp(log_probs).sum(dim=1).sum(dim=1))
     return -torch.sum(log_sum_exp(log_probs))
 
 
@@ -252,17 +251,23 @@ def right_shift(x, pad=None):
     return pad(x)
 
 
-def load_part_of_model(model, path):
+def load_part_of_model(path, model, optimizer=None):
     checkpoint = torch.load(path)
     params = checkpoint["model_state_dict"]
-    # TODO: Restore optimizer
+    # Restore model
     added = 0
     for name, param in params.items():
         if name in model.state_dict().keys():
-            try : 
+            try:
                 model.state_dict()[name].copy_(param)
                 added += 1
             except Exception as e:
                 print(e)
                 pass
     print('added %s of params:' % (added / float(len(model.state_dict().keys()))))
+
+    # Restore optimizer
+    if optimizer:
+        print("WARNING: Not restoring optimizer, not implemented yet")
+
+    return checkpoint["epoch"]
