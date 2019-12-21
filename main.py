@@ -61,6 +61,10 @@ parser.add_argument('-k', '--kernel_size', type=int, default=5,
                     help='Size of conv kernels')
 parser.add_argument('-md', '--max_dilation', type=int, default=2,
                     help='Dilation in downsize stream')
+parser.add_argument('-dp', '--dropout_prob', type=float, default=0.5,
+                    help='Dropout prob used with nn.Dropout2d in gated resnet layers. '
+                         'Argument only used if --ours is provided. Set to 0 to disable '
+                         'dropout entirely.')
 parser.add_argument('--normalization', type=str, default='weight_norm')
 parser.add_argument('-af', '--accum_freq', type=int, default=1,
                     help='Batches per optimization step. Used for gradient accumulation')
@@ -127,7 +131,7 @@ if args.ours:
                 input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix,
                 kernel_size=ks, max_dilation=args.max_dilation,
                 weight_norm=(args.normalization == "weight_norm"),
-                two_stream=args.two_stream)
+                two_stream=args.two_stream, dropout_prob=args.dropout_prob)
 
     # Make masks, plot, copy to GPU and repeat along batch for DataParallel
     generation_idx = get_generation_order_idx(args.order, obs[1], obs[2])
