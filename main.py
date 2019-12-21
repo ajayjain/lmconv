@@ -79,7 +79,8 @@ np.random.seed(args.seed)
 model_name = 'pcnn_{}_lr{:.5f}_wd{}_gc{}_nr-resnet{}_nr-filters{}_k{}_md{}_bs{}'.format(args.dataset, args.lr, args.weight_decay, args.clip, args.nr_resnet, args.nr_filters, args.kernel_size, args.max_dilation, args.batch_size)
 if args.exp_name:
     model_name = f'{model_name}_{args.exp_name}'
-assert not os.path.exists(os.path.join('runs', model_name)), '{} already exists!'.format(model_name)
+run_dir = os.path.join('runs', model_name)
+os.makedirs(run_dir, exist_ok=False)
 
 print("Model name:", model_name)
 print("Args:")
@@ -128,18 +129,21 @@ if args.ours:
                 weight_norm=(args.normalization == "weight_norm"),
                 two_stream=args.two_stream)
 
-    # Make masks, copy to GPU and repeat along batch for DataParallel
+    # Make masks, plot, copy to GPU and repeat along batch for DataParallel
     generation_idx = get_generation_order_idx(args.order, obs[1], obs[2])
     mask_init = get_unfolded_masks(generation_idx, obs[1], obs[2], k=args.kernel_size, dilation=1, mask_type='A')
+    plot_unfolded_masks(obs[1], obs[2], generation_idx, mask_init, k=args.kernel_size, out_path=os.path.join(run_dir, "mask_init.pdf"))
     mask_init = mask_init.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
 
     mask_undilated = get_unfolded_masks(generation_idx, obs[1], obs[2], k=args.kernel_size, dilation=1, mask_type='B')
+    plot_unfolded_masks(obs[1], obs[2], generation_idx, mask_undilated, k=args.kernel_size, out_path=os.path.join(run_dir, "mask_undilated.pdf"))
     mask_undilated = mask_undilated.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
 
     if args.max_dilation == 1:
         mask_dilated = mask_undilated
     else:
         mask_dilated = get_unfolded_masks(generation_idx, obs[1], obs[2], k=args.kernel_size, dilation=args.max_dilation, mask_type='B')
+        plot_unfolded_masks(obs[1], obs[2], generation_idx, mask_dilated, k=args.kernel_size, out_path=os.path.join(run_dir, f"mask_dilated_d{args.max_dilation}.pdf"))
         mask_dilated = mask_dilated.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
 
     print(f"Mask shapes: {mask_init.shape}, {mask_undilated.shape}, {mask_dilated.shape}")

@@ -1,6 +1,9 @@
 # Masking utilities
 
 from hilbertcurve.hilbertcurve import HilbertCurve
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import torch 
 
@@ -112,9 +115,18 @@ def get_unfolded_masks(generation_order_idx, nrows, ncols, k=3, dilation=1, mask
     masks_unf = masks.view(1, nrows * ncols, -1).transpose(1, 2)
     return masks_unf
 
-def plot_kernels(nrows, ncols, generation_order, masks, k=3):
+def plot_masks(nrows, ncols, generation_order, masks, k=3, out_path=None):
     fig, axes = plt.subplots(nrows, ncols)
     plt.suptitle(f"Kernel masks")
     for row_major_index, ((r, c), mask) in enumerate(zip(generation_order, masks)):
         axes[row_major_index // ncols, row_major_index % ncols].imshow(mask, vmin=0, vmax=1)
-    plt.show()
+    plt.setp(axes, xticks=[], yticks=[])
+    if out_path:
+        plt.savefig(out_path)
+    else:
+        plt.show()
+
+def plot_unfolded_masks(nrows, ncols, generation_order, unfolded_masks, k=3, out_path=None):
+    masks = unfolded_masks.view(k, k, -1).permute(2, 0, 1)
+    print(f"Plotting kernel masks and saving to {out_path}...")
+    plot_masks(nrows, ncols, generation_order, masks, k=3, out_path=out_path)
