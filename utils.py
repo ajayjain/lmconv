@@ -1,10 +1,11 @@
 import pdb
 
+from hilbertcurve.hilbertcurve import HilbertCurve
+import numpy as np
 import torch 
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-import numpy as np
 
 from gilbert2d import gilbert2d_idx
 
@@ -255,20 +256,26 @@ def right_shift(x, pad=None):
     return pad(x)
 
 
-def load_part_of_model(model, path):
+def load_part_of_model(path, model, optimizer=None):
     checkpoint = torch.load(path)
     params = checkpoint["model_state_dict"]
-    # TODO: Restore optimizer
+    # Restore model
     added = 0
     for name, param in params.items():
         if name in model.state_dict().keys():
-            try : 
+            try:
                 model.state_dict()[name].copy_(param)
                 added += 1
             except Exception as e:
                 print(e)
                 pass
     print('added %s of params:' % (added / float(len(model.state_dict().keys()))))
+
+    # Restore optimizer
+    if optimizer:
+        print("WARNING: Not restoring optimizer, not implemented yet")
+
+    return checkpoint["epoch"]
 
 
 ###################
@@ -350,24 +357,26 @@ def kernel_masks(generation_order_idx: np.ndarray, nrows, ncols, k=3,
     """Generate kernel masks given a pixel generation order."""
     assert k % 2 == 1, "Only odd sized kernels are implemented"
     half_k = int(k / 2)
-    n = len(generation_order_idx)
-    masks = np.zeros((n, k, k))
+    masks = np.zeros((len(generation_order_idx), k, k))
     locs_generated = set()
     for i, (r, c) in enumerate(generation_order_idx):
+        row_major_index = r * ncols + c
         for dr in range(-half_k, half_k+1):
             for dc in range(-half_k, half_k+1):
                 loc = (r + dr * dilation, c + dc * dilation)
-                can_condition = loc in locs_generated
-                if can_condition:
-                    # The desired location has either been generated,
+                if loc in locs_generated:
+                    # The desired location has been generated,
                     # so we can condition on it
-                    masks[i, half_k + dr, half_k + dc] = 1
+                    masks[row_major_index, half_k + dr, half_k + dc] = 1
                 elif not (0 <= loc[0] < nrows and 0 <= loc[1] < ncols):
-                    masks[i, half_k + dr, half_k + dc] = set_padding
+                    # Kernel location overlaps with padding
+                    masks[row_major_index, half_k + dr, half_k + dc] = set_padding
         locs_generated.add((r, c))
 
     if mask_type == 'B':
         masks[:, half_k, half_k] = 1
+    else:
+        assert np.all(masks[:, half_k, half_k] == 0)
 
     return masks
 
@@ -377,3 +386,10 @@ def get_unfolded_masks(generation_order_idx, nrows, ncols, k=3, dilation=1, mask
     masks = torch.tensor(masks, dtype=torch.float)
     masks_unf = masks.view(1, nrows * ncols, -1).transpose(1, 2)
     return masks_unf
+
+def plot_kernels(nrows, ncols, generation_order, masks, k=3):
+    fig, axes = plt.subplots(nrows, ncols)
+    plt.suptitle(f"Kernel masks")
+    for row_major_index, ((r, c), mask) in enumerate(zip(generation_order, masks)):
+        axes[row_major_index // ncols, row_major_index % ncols].imshow(mask, vmin=0, vmax=1)
+    plt.show()
