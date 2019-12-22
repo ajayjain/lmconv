@@ -97,7 +97,7 @@ def discretized_mix_logistic_loss(x, l):
     return -torch.sum(log_sum_exp(log_probs))
 
 
-def discretized_mix_logistic_loss_1d(x, l):
+def discretized_mix_logistic_log_probs_1d(x, l):
     """ log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval """
     # Pytorch ordering
     x = x.permute(0, 2, 3, 1)
@@ -140,9 +140,35 @@ def discretized_mix_logistic_loss_1d(x, l):
     cond             = (x < -0.999).float()
     log_probs        = cond * log_cdf_plus + (1. - cond) * inner_out
     log_probs        = torch.sum(log_probs, dim=3) + log_prob_from_logits(logit_probs)
+
+    return log_probs
+ 
+
+def discretized_mix_logistic_loss_1d(x, l):
+    """ reduced (summed) log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval
     
-    print("-LSE:", -log_sum_exp(log_probs).sum(dim=1).sum(dim=1))
+    Args:
+        x: B x C x H x W ground truth image
+        l: B x C x H x W x (3 * num_logistic_mix) output of NN
+    """
+    log_probs = discretized_mix_logistic_log_probs_1d(x, l)
     return -torch.sum(log_sum_exp(log_probs))
+
+
+def discretized_mix_logistic_loss_1d_averaged(x, ls):
+    """ reduced (summed) log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval
+    Averages likelihood across multiple sets of mixture parameters
+    
+    Args:
+        x: B x C x H x W ground truth image
+        ls: list of B x C x H x W x (3 * num_logistic_mix) outputs of NN
+    """
+    all_log_probs = []
+    for l in ls:
+        log_probs = discretized_mix_logistic_log_probs_1d(x, l)  # B x H x W x num_logistic_mix
+        all_log_probs.append(log_probs)
+    all_log_probs = torch.cat(all_log_probs, dim=3) - np.log(len(ls))
+    return -torch.sum(log_sum_exp(all_log_probs))
 
 
 def to_one_hot(tensor, n, fill_with=1.):

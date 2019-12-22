@@ -16,18 +16,18 @@ from utils import *
 
 class OurPixelCNNLayer_up(nn.Module):
     def __init__(self, nr_resnet, nr_filters, resnet_nonlinearity, conv_op, kernel_size=(5,5),
-                 weight_norm=True, two_stream=True):
+                 weight_norm=True, two_stream=True, dropout_prob=0.5):
         super(OurPixelCNNLayer_up, self).__init__()
         self.nr_resnet = nr_resnet
         self.two_stream = two_stream
 
         self.u_stream = nn.ModuleList([gated_resnet(nr_filters, conv_op, 
-                                        resnet_nonlinearity, skip_connection=0) 
+                                        resnet_nonlinearity, skip_connection=0, dropout_prob=dropout_prob) 
                                             for _ in range(nr_resnet)])
         
         if self.two_stream:
             self.ul_stream = nn.ModuleList([gated_resnet(nr_filters, conv_op, 
-                                            resnet_nonlinearity, skip_connection=1) 
+                                            resnet_nonlinearity, skip_connection=1, dropout_prob=dropout_prob)
                                                 for _ in range(nr_resnet)])
 
     def forward(self, u, ul=None, mask=None):
@@ -50,18 +50,18 @@ class OurPixelCNNLayer_up(nn.Module):
 
 class OurPixelCNNLayer_down(nn.Module):
     def __init__(self, nr_resnet, nr_filters, resnet_nonlinearity, conv_op, kernel_size=(5,5),
-                 weight_norm=True, two_stream=True):
+                 weight_norm=True, two_stream=True, dropout_prob=0.5):
         super(OurPixelCNNLayer_down, self).__init__()
         self.nr_resnet = nr_resnet
         self.two_stream = two_stream
 
         self.u_stream  = nn.ModuleList([gated_resnet(nr_filters, conv_op, 
-                                        resnet_nonlinearity, skip_connection=1) 
+                                        resnet_nonlinearity, skip_connection=1, dropout_prob=dropout_prob) 
                                             for _ in range(nr_resnet)])
         
         if self.two_stream:
             self.ul_stream = nn.ModuleList([gated_resnet(nr_filters, conv_op, 
-                                            resnet_nonlinearity, skip_connection=2) 
+                                            resnet_nonlinearity, skip_connection=2, dropout_prob=dropout_prob) 
                                                 for _ in range(nr_resnet)])
 
     def forward(self, u, u_list, ul=None, ul_list=None, mask=None):
@@ -82,7 +82,7 @@ class OurPixelCNNLayer_down(nn.Module):
 class OurPixelCNN(nn.Module):
     def __init__(self, nr_resnet=5, nr_filters=80, nr_logistic_mix=10,
                     resnet_nonlinearity='concat_elu', input_channels=3, kernel_size=(5,5),
-                    max_dilation=2, weight_norm=True, two_stream=True):
+                    max_dilation=2, weight_norm=True, two_stream=True, dropout_prob=0.5):
         super(OurPixelCNN, self).__init__()
         assert resnet_nonlinearity == 'concat_elu'
         self.two_stream = two_stream
@@ -100,10 +100,12 @@ class OurPixelCNN(nn.Module):
 
         down_nr_resnet = [nr_resnet] + [nr_resnet + 1] * 2
         self.down_layers = nn.ModuleList([OurPixelCNNLayer_down(down_nr_resnet[i], nr_filters, self.resnet_nonlinearity, conv_op,
-                                                kernel_size=kernel_size, weight_norm=weight_norm, two_stream=self.two_stream) for i in range(3)])
+                                                kernel_size=kernel_size, weight_norm=weight_norm, two_stream=self.two_stream,
+                                                dropout_prob=dropout_prob) for i in range(3)])
 
         self.up_layers   = nn.ModuleList([OurPixelCNNLayer_up(nr_resnet, nr_filters, self.resnet_nonlinearity, conv_op,
-                                                kernel_size=kernel_size, weight_norm=weight_norm, two_stream=self.two_stream) for _ in range(3)])
+                                                kernel_size=kernel_size, weight_norm=weight_norm, two_stream=self.two_stream,
+                                                dropout_prob=dropout_prob) for _ in range(3)])
 
         # NOTE: In PixelCNN++, u_init can access a 2x3 region above each pixel
         self.u_init = conv_op_init(input_channels + 1, nr_filters)

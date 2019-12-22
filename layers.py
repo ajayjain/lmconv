@@ -126,7 +126,7 @@ skip connection parameter : 0 = no skip connection
                             2 = skip connection where skip input size === 2 * input size
 '''
 class gated_resnet(nn.Module):
-    def __init__(self, num_filters, conv_op, nonlinearity=concat_elu, skip_connection=0):
+    def __init__(self, num_filters, conv_op, nonlinearity=concat_elu, skip_connection=0, dropout_prob=0.5):
         super(gated_resnet, self).__init__()
         self.skip_connection = skip_connection
         self.nonlinearity = nonlinearity
@@ -135,7 +135,7 @@ class gated_resnet(nn.Module):
         if skip_connection != 0 : 
             self.nin_skip = nin(2 * skip_connection * num_filters, num_filters)
 
-        self.dropout = nn.Dropout2d(0.5)
+        self.dropout = nn.Dropout2d(dropout_prob) if dropout_prob > 0.0 else None
         self.conv_out = conv_op(2 * num_filters, 2 * num_filters)
 
 
@@ -144,7 +144,8 @@ class gated_resnet(nn.Module):
         if a is not None : 
             x += self.nin_skip(self.nonlinearity(a))
         x = self.nonlinearity(x)
-        x = self.dropout(x)
+        if self.dropout:
+            x = self.dropout(x)
         x = self.conv_out(x, mask=mask)
         a, b = torch.chunk(x, 2, dim=1)
         c3 = a * torch.sigmoid(b)
