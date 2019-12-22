@@ -71,7 +71,9 @@ parser.add_argument('-af', '--accum_freq', type=int, default=1,
 parser.add_argument('--two_stream', action="store_true", help="Enable two stream model")
 parser.add_argument('--order', type=str, choices=["raster_scan", "s_curve", "hilbert", "gilbert2d"],
                     help="Autoregressive generation order")
-parser.add_argument('--mode', type=str, choices=["train", "sample"],
+parser.add_argument('--randomize_order', action="store_true", help="Randomize between 8 variants of the "
+                    "pixel generation order.")
+parser.add_argument('--mode', type=str, choices=["train", "sample", "test"],
                     default="train")
 
 args = parser.parse_args()
@@ -84,7 +86,8 @@ model_name = 'pcnn_{}_lr{:.5f}_wd{}_gc{}_nr-resnet{}_nr-filters{}_k{}_md{}_bs{}'
 if args.exp_name:
     model_name = f'{model_name}_{args.exp_name}'
 run_dir = os.path.join('runs', model_name)
-os.makedirs(run_dir, exist_ok=False)
+if args.mode == "train":
+    os.makedirs(run_dir, exist_ok=False)
 
 print("Model name:", model_name)
 print("Args:")
@@ -107,7 +110,8 @@ if 'mnist' in args.dataset :
                     transform=ds_transforms), batch_size=args.batch_size, shuffle=True, **kwargs)
 
     print("discretized_mix_logistic_loss_1d")
-    loss_op   = lambda real, fake : discretized_mix_logistic_loss_1d(real, fake)
+    loss_op = lambda real, fake : discretized_mix_logistic_loss_1d(real, fake)
+    loss_op_overaged = lambda real, fakes : discretized_mix_logistic_loss_1d_averaged(real, fakes)
     sample_op = lambda x : sample_from_discretized_mix_logistic_1d(x, args.nr_logistic_mix)
 
 elif 'cifar' in args.dataset :
@@ -119,44 +123,50 @@ elif 'cifar' in args.dataset :
 
     print("discretized_mix_logistic_loss")
     loss_op   = lambda real, fake : discretized_mix_logistic_loss(real, fake)
+    # TODO: implement loss_op_averaged
     sample_op = lambda x : sample_from_discretized_mix_logistic(x, args.nr_logistic_mix)
 else :
     raise Exception('{} dataset not in {mnist, cifar10}'.format(args.dataset))
 
 assert args.normalization in ['weight_norm', 'none']
 
+
 if args.ours:
-    ks = (args.kernel_size, args.kernel_size)
-    model = OurPixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
-                input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix,
-                kernel_size=ks, max_dilation=args.max_dilation,
+    print("Constructing our model")
+    model = OurPixelCNN(
+                nr_resnet=args.nr_resnet,
+                nr_filters=args.nr_filters, 
+                input_channels=input_channels,
+                nr_logistic_mix=args.nr_logistic_mix,
+                kernel_size=(args.kernel_size, args.kernel_size),
+                max_dilation=args.max_dilation,
                 weight_norm=(args.normalization == "weight_norm"),
-                two_stream=args.two_stream, dropout_prob=args.dropout_prob)
+                two_stream=args.two_stream,
+                dropout_prob=args.dropout_prob)
 
-    # Make masks, plot, copy to GPU and repeat along batch for DataParallel
-    generation_idx = get_generation_order_idx(args.order, obs[1], obs[2])
-    mask_init = get_unfolded_masks(generation_idx, obs[1], obs[2], k=args.kernel_size, dilation=1, mask_type='A')
-    plot_unfolded_masks(obs[1], obs[2], generation_idx, mask_init, k=args.kernel_size, out_path=os.path.join(run_dir, "mask_init.pdf"))
-    mask_init = mask_init.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
-
-    mask_undilated = get_unfolded_masks(generation_idx, obs[1], obs[2], k=args.kernel_size, dilation=1, mask_type='B')
-    plot_unfolded_masks(obs[1], obs[2], generation_idx, mask_undilated, k=args.kernel_size, out_path=os.path.join(run_dir, "mask_undilated.pdf"))
-    mask_undilated = mask_undilated.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
-
-    if args.max_dilation == 1:
-        mask_dilated = mask_undilated
+    # Get generation orders
+    base_generation_idx = get_generation_order_idx(args.order, obs[1], obs[2])
+    if args.randomize_order:
+        all_generation_idx = augment_orders(base_generation_idx, obs)
     else:
-        mask_dilated = get_unfolded_masks(generation_idx, obs[1], obs[2], k=args.kernel_size, dilation=args.max_dilation, mask_type='B')
-        plot_unfolded_masks(obs[1], obs[2], generation_idx, mask_dilated, k=args.kernel_size, out_path=os.path.join(run_dir, f"mask_dilated_d{args.max_dilation}.pdf"))
-        mask_dilated = mask_dilated.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
+        all_generation_idx = [base_generation_idx]
+    if args.mode == "train":
+        plot_orders(all_generation_idx, obs, size=5, plot_rows=4, out_path=os.path.join(run_dir, "orderings.png"))
 
-    print(f"Mask shapes: {mask_init.shape}, {mask_undilated.shape}, {mask_dilated.shape}")
+    # Make masks and plot
+    all_masks = []
+    for i, generation_idx in enumerate(all_generation_idx):
+        masks = get_masks(generation_idx, obs[1], obs[2], args.kernel_size, args.max_dilation, run_dir, plot_suffix=f"order{i}", plot=(args.mode == "train"))
+        print(f"Mask shapes: {masks[0].shape}, {masks[1].shape}, {masks[2].shape}")
+        all_masks.append(masks)
 else:
-    assert False  # DEBUG
-    generation_idx = get_generation_order_idx("raster_scan", obs[1], obs[2])
+    print("Constructing original PixelCNN++")
     model = PixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
                 input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix)
-    mask_init, mask_undilated, mask_dilated = None, None, None
+
+    assert not args.randomize_order
+    all_generation_idx = [get_generation_order_idx("raster_scan", obs[1], obs[2])]
+    all_masks = [(None, None, None)]
 model = nn.DataParallel(model)
 model = model.cuda()
 
@@ -171,20 +181,44 @@ else:
 optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=args.lr_decay)
 
-def sample(model, generation_idx, verbose=False):
+def test(model, all_masks, test_loader, epoch="N/A"):
+    print(f"Testing with ensemble of {len(all_masks)} orderings")
+    test_loss = 0.
+    for batch_idx, (input,_) in enumerate(tqdm(test_loader, desc=f"Test after epoch {epoch}")):
+        input = input.cuda(non_blocking=True)
+        input_var = Variable(input)
+
+        #mask_init, mask_undilated, mask_dilated = all_masks[0]
+        #output = model(input_var, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
+        #loss = loss_op(input_var, output)
+
+        # Average likelihoods over multiple orderings
+        outputs = []
+        for mask_init, mask_undilated, mask_dilated in all_masks:
+            output = model(input_var, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
+            outputs.append(output)
+        loss = loss_op_overaged(input_var, outputs)
+
+        test_loss += loss.item()
+        del loss, output
+
+    # FIXME: for final evaluation, don't use batch_idx * args.batch_size -- this slightly overestimates
+    # the number of dims (10016 * prod(obs) * log(2) for mnist) since the last iteration might have fewer than
+    # args.batch_size images. Leaving this code the same for now to allow comparison between training runs.
+    deno = batch_idx * args.batch_size * np.prod(obs) * np.log(2.)
+    assert deno > 0, embed()
+    test_bpd = test_loss / deno
+    return test_bpd
+
+def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated):
     model.eval()
     data = torch.zeros(sample_batch_size, obs[0], obs[1], obs[2])
     data = data.cuda()
-    for num_px_sampled, (i, j) in enumerate(generation_idx):
-    # for i in range(obs[1]):
-    #     for j in range(obs[2]):
+    for num_px_sampled, (i, j) in enumerate(tqdm(generation_idx, desc="Sampling pixels")):
         data_v = Variable(data)
         out = model(data_v, sample=True, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
         out_sample = sample_op(out)
         data[:, :, i, j] = out_sample.data[:, :, i, j]
-
-        if num_px_sampled % 10 == 0 and verbose:
-            print(f"Sampled {num_px_sampled} pixels")
     return data
 
 if args.mode == "train":
@@ -200,21 +234,10 @@ if args.mode == "train":
         for batch_idx, (input,_) in enumerate(tqdm(train_loader, desc=f"Train epoch {epoch}")):
             input = input.cuda(non_blocking=True)
 
-            if not torch.isfinite(input).all().cpu().item():
-                print("ERROR: main.py: NaN or Inf in input, embedding")
-                embed()
-
-            output = model(input, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
-
-            if not torch.isfinite(output).all().cpu().item():
-                print("ERROR: main.py: NaN or Inf in returned tensor, embedding")
-                embed()
+            order_i = np.random.randint(len(all_masks))
+            output = model(input, mask_init=all_masks[order_i][0], mask_undilated=all_masks[order_i][1], mask_dilated=all_masks[order_i][2])
 
             loss = loss_op(input, output)
-
-            if not torch.isfinite(loss).all().cpu().item():
-                print("ERROR: main.py: NaN or Inf in loss, embedding")
-                embed()
 
             if batch_idx % args.accum_freq == 0:
                 optimizer.zero_grad()
@@ -268,27 +291,13 @@ if args.mode == "train":
 
         model.eval()
         with torch.no_grad():
-            test_loss = 0.
-            for batch_idx, (input,_) in enumerate(tqdm(test_loader, desc=f"Test epoch {epoch}")):
-                input = input.cuda(non_blocking=True)
-                input_var = Variable(input)
-                output = model(input_var, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
-                loss = loss_op(input_var, output)
-        
-                if not torch.isfinite(loss).all().cpu().item():
-                    print("ERROR: main.py: NaN or Inf in test loss in test loop, embedding")
-                    embed()
-
-                test_loss += loss.item()
-                del loss, output
-
-            deno = batch_idx * args.batch_size * np.prod(obs) * np.log(2.)
-            assert deno > 0, embed()
-            test_bpd = test_loss / deno
+            test_bpd = test(model, all_masks, test_loader, epoch)
             writer.add_scalar('test/bpd', test_bpd, global_step)
+            print('test loss : %s' % test_bpd)
+
+            # Log min test bpd for smoothness
             min_test_bpd = min(min_test_bpd, test_bpd)
             writer.add_scalar('test/min_bpd', min_test_bpd, global_step)
-            print('test loss : %s' % test_bpd)
 
             if (epoch + 1) % args.save_interval == 0: 
                 print('saving model...')
@@ -298,42 +307,26 @@ if args.mode == "train":
                     "model_state_dict": model.module.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "args": vars(args),
-                    # "mask_init": mask_init,
-                    # "mask": mask
                 }, 'models/{}_{}.pth'.format(model_name, epoch))
 
-
             if (epoch + 1) % args.sample_interval == 0: 
-                print('sampling images...')
-                sample_t = sample(model, generation_idx)
+                print('sampling images with 0th (base) order...')
+                # TODO: Sample with random order
+                sample_t = sample(model, all_generation_idx[0])
                 sample_t = rescaling_inv(sample_t)
-                utils.save_image(sample_t,'images/{}_{}.png'.format(model_name, epoch), 
-                        nrow=5, padding=0)
+                utils.save_image(sample_t, os.path.join(run_dir, f'tsample_{epoch}.png'), 
+                                 nrow=5, padding=0)
 elif args.mode == "sample":
     model.eval()
     with torch.no_grad():
-        # test_loss = 0.
-        # for batch_idx, (input,_) in enumerate(tqdm(test_loader, desc=f"Test epoch {epoch}")):
-        #     input = input.cuda(non_blocking=True)
-        #     input_var = Variable(input)
-        #     output = model(input_var, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
-        #     loss = loss_op(input_var, output)
-    
-        #     if not torch.isfinite(loss).all().cpu().item():
-        #         print("ERROR: main.py: NaN or Inf in test loss in test loop, embedding")
-        #         embed()
-
-        #     test_loss += loss.item()
-        #     del loss, output
-
-        # deno = batch_idx * args.batch_size * np.prod(obs) * np.log(2.)
-        # assert deno > 0, embed()
-        # test_bpd = test_loss / deno
-        # min_test_bpd = min(min_test_bpd, test_bpd)
-        # print('test loss : %s' % test_bpd)
-
         print('sampling images...')
-        sample_t = sample(model, generation_idx, verbose=True)
+        sample_t = sample(model, all_generation_idx[0])
         sample_t = rescaling_inv(sample_t)
-        utils.save_image(sample_t,'images/{}_{}.png'.format(model_name, checkpoint_epochs), 
-                nrow=5, padding=0)
+        utils.save_image(sample_t, os.path.join(run_dir, f'sample_{checkpoint_epochs}.png'),
+                         nrow=5, padding=0)
+elif args.mode == "test":
+    model.eval()
+    with torch.no_grad():
+        print('testing...')
+        test_bpd = test(model, all_masks, test_loader, checkpoint_epochs)
+        print('test loss : %s bpd' % test_bpd)
