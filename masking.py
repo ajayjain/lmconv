@@ -1,4 +1,5 @@
 # Masking utilities
+import logging
 import math
 import os
 
@@ -11,6 +12,7 @@ import torch
 
 from gilbert2d import gilbert2d_idx
 
+logger = logging.getLogger("gen")
 
 ####################
 # Generation orders
@@ -162,8 +164,8 @@ def get_masks(generation_idx, nrows: int, ncols: int, k: int=3, max_dilation: in
     mask_init = get_unfolded_masks(generation_idx, nrows, ncols, k=k, dilation=1, mask_type='A')
     mask_undilated = get_unfolded_masks(generation_idx, nrows, ncols, k=k, dilation=1, mask_type='B')
     if plot:
-        plot_unfolded_masks(nrows, ncols, generation_idx, mask_init, k=k, out_path=os.path.join(out_dir, f"mask_init_{plot_suffix}.png"))
-        plot_unfolded_masks(nrows, ncols, generation_idx, mask_undilated, k=k, out_path=os.path.join(out_dir, f"mask_undilated_{plot_suffix}.png"))
+        plot_unfolded_masks(nrows, ncols, generation_idx, mask_init, k=k, out_path=os.path.join(out_dir, f"mask_init_{plot_suffix}.pdf"))
+        plot_unfolded_masks(nrows, ncols, generation_idx, mask_undilated, k=k, out_path=os.path.join(out_dir, f"mask_undilated_{plot_suffix}.pdf"))
     mask_init = mask_init.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
     mask_undilated = mask_undilated.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
 
@@ -172,7 +174,7 @@ def get_masks(generation_idx, nrows: int, ncols: int, k: int=3, max_dilation: in
     else:
         mask_dilated = get_unfolded_masks(generation_idx, nrows, ncols, k=k, dilation=max_dilation, mask_type='B')
         if plot:
-            plot_unfolded_masks(nrows, ncols, generation_idx, mask_dilated, k=k, out_path=os.path.join(out_dir, f"mask_dilated_d{max_dilation}_{plot_suffix}.png"))
+            plot_unfolded_masks(nrows, ncols, generation_idx, mask_dilated, k=k, out_path=os.path.join(out_dir, f"mask_dilated_d{max_dilation}_{plot_suffix}.pdf"))
         mask_dilated = mask_dilated.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
 
     return mask_init, mask_undilated, mask_dilated
@@ -181,20 +183,15 @@ def plot_masks(nrows, ncols, generation_order, masks, k=3, out_path=None):
     import time
     fig, axes = plt.subplots(nrows, ncols)
     plt.suptitle(f"Kernel masks")
-    t1 = time.time()
     for row_major_index, ((r, c), mask) in enumerate(zip(generation_order, masks)):
         axes[row_major_index // ncols, row_major_index % ncols].imshow(mask, vmin=0, vmax=1)
-    t2 = time.time()
     plt.setp(axes, xticks=[], yticks=[])
-    t3 = time.time()
     if out_path:
         plt.savefig(out_path)
     else:
         plt.show()
-    t4 = time.time()
-    print(f"Times: {t2 - t1}, {t3 - t2}, {t4 - t3}")
 
 def plot_unfolded_masks(nrows, ncols, generation_order, unfolded_masks, k=3, out_path=None):
     masks = unfolded_masks.view(k, k, -1).permute(2, 0, 1)
-    print(f"Plotting kernel masks and saving to {out_path}...")
+    logger.info(f"Plotting kernel masks and saving to {out_path}...")
     plot_masks(nrows, ncols, generation_order, masks, k=3, out_path=out_path)

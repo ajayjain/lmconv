@@ -1,3 +1,4 @@
+import logging
 import math
 import pdb
 
@@ -9,6 +10,8 @@ from torch.autograd import Variable
 import numpy as np
 
 from utils import * 
+
+logger = logging.getLogger("gen")
 
 # DEBUG TO REMOVE WEIGHT NORMALIZATION
 # from torch.nn.utils import weight_norm as wn
@@ -258,7 +261,7 @@ class input_masked_conv2d(nn.Module):
             x_unf_channels_batched = x_unf.view(x_unf.size(0) * C, x_unf.size(1) // C, x_unf.size(2))
             x_unf = torch.mul(x_unf_channels_batched, mask).view(x_unf.shape)
         else:
-            print("WARN: input_masked_conv2d not provided mask, not masking!")
+            logger.warning("input_masked_conv2d not provided mask, not masking!")
 
         # Perform convolution via matrix multiplication and addition
         weight_matrix = self.weight.view(self.out_channels, -1)

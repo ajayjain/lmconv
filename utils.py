@@ -1,8 +1,31 @@
+import logging
+
 import numpy as np
 import torch 
 from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+logger = logging.getLogger("gen")
+
+
+def configure_logger(filename="debug.log"):
+    logger = logging.getLogger("gen")
+    logger.setLevel(logging.DEBUG)
+    fh = logging.FileHandler(filename)
+    fh.setLevel(logging.DEBUG)
+    # create console handler with a higher log level
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    # create formatter and add it to the handlers
+    formatter = logging.Formatter("[%(asctime)s|%(name)s|%(levelname)s] %(message)s")
+    fh.setFormatter(formatter)
+    ch.setFormatter(formatter)
+    # add the handlers to the logger
+    logger.addHandler(fh)
+    logger.addHandler(ch)
+    return logger
 
 
 def concat_elu(x):
@@ -288,12 +311,12 @@ def load_part_of_model(path, model, optimizer=None):
                 model.state_dict()[name].copy_(param)
                 added += 1
             except Exception as e:
-                print(e)
+                logger.error("Error loading model.state_dict()[%s]: %s", name, e)
                 pass
-    print('added %s of params:' % (added / float(len(model.state_dict().keys()))))
+    logger.info('Loadded %s fraction of params:' % (added / float(len(model.state_dict().keys()))))
 
     # Restore optimizer
     if optimizer:
-        print("WARNING: Not restoring optimizer, not implemented yet")
+        logger.error("Not restoring optimizer, not implemented yet")
 
     return checkpoint["epoch"]

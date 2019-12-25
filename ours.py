@@ -172,10 +172,6 @@ class OurPixelCNN(nn.Module):
 
         x_out = self.nin_out(F.elu(ul))
 
-        if not torch.isfinite(x_out).all().cpu().item():
-            print("ERROR: NaN or Inf in returned tensor, embedding")
-            embed()
-
         assert len(u_list) == len(ul_list) == 0, pdb.set_trace()
 
         return x_out
@@ -200,10 +196,6 @@ class OurPixelCNN(nn.Module):
         u = self.down_layers[2](u, u_list, mask=mask_undilated)
 
         x_out = self.nin_out(F.elu(u))
-
-        if not torch.isfinite(x_out).all().cpu().item():
-            print("ERROR: NaN or Inf in returned tensor, embedding")
-            embed()
 
         return x_out
         

@@ -11,7 +11,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.optim import lr_scheduler
 from torchvision import datasets, transforms, utils
-from tqdm import tqdm
+import tqdm
 
 from masking import *
 from model import *
@@ -28,13 +28,14 @@ parser.add_argument('-d', '--dataset', type=str,
                     default='cifar', help='Can be either cifar|mnist')
 parser.add_argument('-p', '--print_every', type=int, default=50,
                     help='how many iterations between print statements')
-parser.add_argument('-t', '--save_interval', type=int, default=10,
+parser.add_argument('-t', '--save_interval', type=int, default=20,
                     help='Every how many epochs to write checkpoint?')
-parser.add_argument('-ts', '--sample_interval', type=int, default=2,
+parser.add_argument('-ts', '--sample_interval', type=int, default=4,
                     help='Every how many epochs to write samples?')
 parser.add_argument('-r', '--load_params', type=str, default=None,
                     help='Restore training from previous model checkpoint?')
 parser.add_argument('--exp_name', type=str, default=None)
+parser.add_argument('--exp_id', type=int, default=0)
 parser.add_argument('--ours', action='store_true')
 # pixelcnn++ and our model
 parser.add_argument('-q', '--nr_resnet', type=int, default=5,
@@ -65,7 +66,8 @@ parser.add_argument('-dp', '--dropout_prob', type=float, default=0.5,
                     help='Dropout prob used with nn.Dropout2d in gated resnet layers. '
                          'Argument only used if --ours is provided. Set to 0 to disable '
                          'dropout entirely.')
-parser.add_argument('--normalization', type=str, default='weight_norm')
+parser.add_argument('-nm', '--normalization', type=str, default='weight_norm',
+                    choices=["none", "weight_norm"])
 parser.add_argument('-af', '--accum_freq', type=int, default=1,
                     help='Batches per optimization step. Used for gradient accumulation')
 parser.add_argument('--two_stream', action="store_true", help="Enable two stream model")
@@ -77,22 +79,36 @@ parser.add_argument('--mode', type=str, choices=["train", "sample", "test"],
                     default="train")
 
 args = parser.parse_args()
+assert args.normalization != "weight_norm", "Weight normalization manually disabled in layers.py"
 
-# reproducibility
+
+# Set seed for reproducibility
 torch.manual_seed(args.seed)
 np.random.seed(args.seed)
 
-model_name = 'pcnn_{}_lr{:.5f}_wd{}_gc{}_nr-resnet{}_nr-filters{}_k{}_md{}_bs{}'.format(args.dataset, args.lr, args.weight_decay, args.clip, args.nr_resnet, args.nr_filters, args.kernel_size, args.max_dilation, args.batch_size)
+
+# Create run directory
+model_name = "{:05d}_{}_lr{:.5f}_wd{}_gc{}_nr-resnet{}_nr-filters{}_k{}_md{}_bs{}".format(
+    args.exp_id, args.dataset, args.lr, args.weight_decay, args.clip, args.nr_resnet, args.nr_filters, args.kernel_size, args.max_dilation, args.batch_size)
+if args.normalization != "none":
+    model_name = f"{model_name}_{args.normalization}"
 if args.exp_name:
-    model_name = f'{model_name}_{args.exp_name}'
-run_dir = os.path.join('runs', model_name)
+    model_name = f"{model_name}_{args.exp_name}"
+run_dir = os.path.join("runs", model_name)
 if args.mode == "train":
     os.makedirs(run_dir, exist_ok=False)
 
-print("Model name:", model_name)
-print("Args:")
-print(args)
 
+# Log arguments
+logger = configure_logger(os.path.join(run_dir, f"{args.mode}.log"))
+logger.info("Model name: %s", model_name)
+logger.info("Run directory: %s", run_dir)
+logger.info("Arguments: %s", args)
+for k, v in vars(args).items():
+    logger.info(f"  {k}: {v}")
+
+
+# Create data loaders
 sample_batch_size = 25
 obs = (1, 28, 28) if 'mnist' in args.dataset else (3, 32, 32)
 input_channels = obs[0]
@@ -109,7 +125,7 @@ if 'mnist' in args.dataset :
     test_loader  = torch.utils.data.DataLoader(datasets.MNIST(args.data_dir, train=False, 
                     transform=ds_transforms), batch_size=args.batch_size, shuffle=True, **kwargs)
 
-    print("discretized_mix_logistic_loss_1d")
+    logger.info("Using unaveraged loss discretized_mix_logistic_loss_1d, averaged loss discretized_mix_logistic_loss_1d_averaged")
     loss_op = lambda real, fake : discretized_mix_logistic_loss_1d(real, fake)
     loss_op_overaged = lambda real, fakes : discretized_mix_logistic_loss_1d_averaged(real, fakes)
     sample_op = lambda x : sample_from_discretized_mix_logistic_1d(x, args.nr_logistic_mix)
@@ -121,18 +137,17 @@ elif 'cifar' in args.dataset :
     test_loader  = torch.utils.data.DataLoader(datasets.CIFAR10(args.data_dir, train=False, 
                     transform=ds_transforms), batch_size=args.batch_size, shuffle=True, **kwargs)
 
-    print("discretized_mix_logistic_loss")
+    logger.info("Using loss discretized_mix_logistic_loss")
     loss_op   = lambda real, fake : discretized_mix_logistic_loss(real, fake)
     # TODO: implement loss_op_averaged
     sample_op = lambda x : sample_from_discretized_mix_logistic(x, args.nr_logistic_mix)
 else :
     raise Exception('{} dataset not in {mnist, cifar10}'.format(args.dataset))
 
-assert args.normalization in ['weight_norm', 'none']
 
-
+# Construct model
 if args.ours:
-    print("Constructing our model")
+    logger.info("Constructing our model")
     model = OurPixelCNN(
                 nr_resnet=args.nr_resnet,
                 nr_filters=args.nr_filters, 
@@ -157,10 +172,10 @@ if args.ours:
     all_masks = []
     for i, generation_idx in enumerate(all_generation_idx):
         masks = get_masks(generation_idx, obs[1], obs[2], args.kernel_size, args.max_dilation, run_dir, plot_suffix=f"order{i}", plot=(args.mode == "train"))
-        print(f"Mask shapes: {masks[0].shape}, {masks[1].shape}, {masks[2].shape}")
+        logger.info(f"Mask shapes: {masks[0].shape}, {masks[1].shape}, {masks[2].shape}")
         all_masks.append(masks)
 else:
-    print("Constructing original PixelCNN++")
+    logger.info("Constructing original PixelCNN++")
     model = PixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
                 input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix)
 
@@ -170,21 +185,26 @@ else:
 model = nn.DataParallel(model)
 model = model.cuda()
 
+
+# Load model parameters from checkpoint
 if args.load_params:
     # TODO: Restore optimizer
     checkpoint_epochs = load_part_of_model(args.load_params, model=model.module, optimizer=None)
-    print(f'model parameters loaded, from after {checkpoint_epochs} training epochs')
+    logger.info(f"Model parameters loaded, from after {checkpoint_epochs} training epochs")
 else:
     checkpoint_epochs = -1
 
+
+# Create optimizer
 # NOTE: PixelCNN++ TF repo uses betas=(0.95, 0.9995), different than PyTorch defaults
 optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=args.lr_decay)
 
+
 def test(model, all_masks, test_loader, epoch="N/A"):
-    print(f"Testing with ensemble of {len(all_masks)} orderings")
+    logger.info(f"Testing with ensemble of {len(all_masks)} orderings")
     test_loss = 0.
-    for batch_idx, (input,_) in enumerate(tqdm(test_loader, desc=f"Test after epoch {epoch}")):
+    for batch_idx, (input,_) in enumerate(tqdm.tqdm(test_loader, desc=f"Test after epoch {epoch}")):
         input = input.cuda(non_blocking=True)
         input_var = Variable(input)
 
@@ -210,19 +230,21 @@ def test(model, all_masks, test_loader, epoch="N/A"):
     test_bpd = test_loss / deno
     return test_bpd
 
+
 def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated):
     model.eval()
     data = torch.zeros(sample_batch_size, obs[0], obs[1], obs[2])
     data = data.cuda()
-    for num_px_sampled, (i, j) in enumerate(tqdm(generation_idx, desc="Sampling pixels")):
+    for num_px_sampled, (i, j) in enumerate(tqdm.tqdm(generation_idx, desc="Sampling pixels")):
         data_v = Variable(data)
         out = model(data_v, sample=True, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
         out_sample = sample_op(out)
         data[:, :, i, j] = out_sample.data[:, :, i, j]
     return data
 
+
 if args.mode == "train":
-    print('starting training')
+    logger.info("starting training")
     writer = SummaryWriter(log_dir=os.path.join('runs', model_name))
     global_step = 0
     min_train_bpd = 1e12
@@ -231,7 +253,7 @@ if args.mode == "train":
         train_loss = 0.
         time_ = time.time()
         model.train()
-        for batch_idx, (input,_) in enumerate(tqdm(train_loader, desc=f"Train epoch {epoch}")):
+        for batch_idx, (input,_) in enumerate(tqdm.tqdm(train_loader, desc=f"Train epoch {epoch}")):
             input = input.cuda(non_blocking=True)
 
             order_i = np.random.randint(len(all_masks))
@@ -247,9 +269,7 @@ if args.mode == "train":
                     # Compute and rescale gradient norm
                     gradient_norm = nn.utils.clip_grad_norm_(model.parameters(), args.clip)
                     if gradient_norm > args.clip:
-                        print("WARN: Clipped gradients")
-                    else:
-                        print("No need to clip gradients")
+                        logger.warning(f"Clipped gradients to norm {args.clip}")
                 else:
                     # Just compute the gradient norm
                     parameters = list(filter(lambda p: p.grad is not None, model.parameters()))
@@ -270,12 +290,11 @@ if args.mode == "train":
             writer.add_scalar('train/min_bpd', min_train_bpd, global_step)
 
             if batch_idx >= 100 and (loss.item() / deno) >= 10:
-                print("WARNING: main.py: large batch loss {} bpd".format(loss.item() / deno))
-                # pdb.set_trace()
+                logger.warning("WARNING: main.py: large batch loss {} bpd".format(loss.item() / deno))
 
             if (batch_idx + 1) % args.print_every == 0: 
                 deno = args.print_every * args.batch_size * np.prod(obs) * np.log(2.)
-                print('train bpd : {:.4f}, train loss : {:.1f}, time : {:.4f}, global step: {}'.format(
+                logger.info('train bpd : {:.4f}, train loss : {:.1f}, time : {:.4f}, global step: {}'.format(
                     (train_loss / deno),
                     train_loss,
                     (time.time() - time_),
@@ -293,24 +312,24 @@ if args.mode == "train":
         with torch.no_grad():
             test_bpd = test(model, all_masks, test_loader, epoch)
             writer.add_scalar('test/bpd', test_bpd, global_step)
-            print('test loss : %s' % test_bpd)
+            logger.info('test loss : %s' % test_bpd)
 
             # Log min test bpd for smoothness
             min_test_bpd = min(min_test_bpd, test_bpd)
             writer.add_scalar('test/min_bpd', min_test_bpd, global_step)
 
             if (epoch + 1) % args.save_interval == 0: 
-                print('saving model...')
+                logger.info('saving model...')
                 torch.save({
                     "epoch": epoch,
                     "test_loss": test_bpd,
                     "model_state_dict": model.module.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "args": vars(args),
-                }, 'models/{}_{}.pth'.format(model_name, epoch))
+                }, os.path.join(run_dir, f"{args.exp_id}_ep{epoch}.pth"))
 
             if (epoch + 1) % args.sample_interval == 0: 
-                print('sampling images with 0th (base) order...')
+                logging.info('sampling images with 0th (base) order...')
                 # TODO: Sample with random order
                 sample_t = sample(model, all_generation_idx[0])
                 sample_t = rescaling_inv(sample_t)
@@ -319,7 +338,7 @@ if args.mode == "train":
 elif args.mode == "sample":
     model.eval()
     with torch.no_grad():
-        print('sampling images...')
+        logging.info('sampling images...')
         sample_t = sample(model, all_generation_idx[0])
         sample_t = rescaling_inv(sample_t)
         utils.save_image(sample_t, os.path.join(run_dir, f'sample_{checkpoint_epochs}.png'),
@@ -327,6 +346,6 @@ elif args.mode == "sample":
 elif args.mode == "test":
     model.eval()
     with torch.no_grad():
-        print('testing...')
+        logging.info('testing...')
         test_bpd = test(model, all_masks, test_loader, checkpoint_epochs)
-        print('test loss : %s bpd' % test_bpd)
+        logging.info('test loss : %s bpd' % test_bpd)
