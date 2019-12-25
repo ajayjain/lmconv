@@ -1,6 +1,10 @@
 __pycache__/
 runs/
 models/
+backups/
+data/
+figures/
+scratch/
 *.onnx
 *.png
 *-checkpoint.ipynb

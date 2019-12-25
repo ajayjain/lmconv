@@ -38,7 +38,7 @@ parser.add_argument('-rd', '--run_dir', type=str, default=None,
                     help="Optionally specify run directory. One will be generated otherwise."
                          "Use to save log files in a particular place")
 parser.add_argument('--exp_name', type=str, default=None)
-parser.add_argument('--exp_id', type=int, default=0)
+parser.add_argument('-ID', '--exp_id', type=int, default=0)
 parser.add_argument('--ours', action='store_true')
 # pixelcnn++ and our model
 parser.add_argument('-q', '--nr_resnet', type=int, default=5,
