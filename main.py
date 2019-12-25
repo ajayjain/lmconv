@@ -26,7 +26,7 @@ parser.add_argument('-o', '--save_dir', type=str, default='models',
                     help='Location for parameter checkpoints and samples')
 parser.add_argument('-d', '--dataset', type=str,
                     default='cifar', help='Can be either cifar|mnist')
-parser.add_argument('-p', '--print_every', type=int, default=50,
+parser.add_argument('-p', '--print_every', type=int, default=20,
                     help='how many iterations between print statements')
 parser.add_argument('-t', '--save_interval', type=int, default=20,
                     help='Every how many epochs to write checkpoint?')
@@ -49,7 +49,7 @@ parser.add_argument('-l', '--lr', type=float,
 parser.add_argument('-e', '--lr_decay', type=float, default=0.999995,
                     help='Learning rate decay, applied every step of the optimization')
 parser.add_argument('-wd', '--weight_decay', type=float,
-                    default=5e-4, help='Weight decay during optimization')
+                    default=0, help='Weight decay during optimization')
 parser.add_argument('-c', '--clip', type=float, default=-1, help='Gradient norms clipped to this value')
 parser.add_argument('-b', '--batch_size', type=int, default=64,
                     help='Batch size during training per GPU')
@@ -88,12 +88,12 @@ np.random.seed(args.seed)
 
 
 # Create run directory
-model_name = "{:05d}_{}_lr{:.5f}_wd{}_gc{}_nr-resnet{}_nr-filters{}_k{}_md{}_bs{}".format(
-    args.exp_id, args.dataset, args.lr, args.weight_decay, args.clip, args.nr_resnet, args.nr_filters, args.kernel_size, args.max_dilation, args.batch_size)
+model_name = "{:05d}_{}_lr{:.5f}_bs{}_gc{}_k{}_md{}".format(
+    args.exp_id, args.dataset, args.lr, args.batch_size, args.clip, args.kernel_size, args.max_dilation)
 if args.normalization != "none":
     model_name = f"{model_name}_{args.normalization}"
 if args.exp_name:
-    model_name = f"{model_name}_{args.exp_name}"
+    model_name = f"{model_name}+{args.exp_name}"
 run_dir = os.path.join("runs", model_name)
 if args.mode == "train":
     os.makedirs(run_dir, exist_ok=False)
@@ -171,7 +171,8 @@ if args.ours:
     # Make masks and plot
     all_masks = []
     for i, generation_idx in enumerate(all_generation_idx):
-        masks = get_masks(generation_idx, obs[1], obs[2], args.kernel_size, args.max_dilation, run_dir, plot_suffix=f"order{i}", plot=(args.mode == "train"))
+        masks = get_masks(generation_idx, obs[1], obs[2], args.kernel_size, args.max_dilation,
+                          run_dir, plot_suffix=f"order{i}", plot=False)#(args.mode == "train"))
         logger.info(f"Mask shapes: {masks[0].shape}, {masks[1].shape}, {masks[2].shape}")
         all_masks.append(masks)
 else:
