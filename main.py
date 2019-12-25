@@ -34,6 +34,9 @@ parser.add_argument('-ts', '--sample_interval', type=int, default=4,
                     help='Every how many epochs to write samples?')
 parser.add_argument('-r', '--load_params', type=str, default=None,
                     help='Restore training from previous model checkpoint?')
+parser.add_argument('-rd', '--run_dir', type=str, default=None,
+                    help="Optionally specify run directory. One will be generated otherwise."
+                         "Use to save log files in a particular place")
 parser.add_argument('--exp_name', type=str, default=None)
 parser.add_argument('--exp_id', type=int, default=0)
 parser.add_argument('--ours', action='store_true')
@@ -88,20 +91,23 @@ np.random.seed(args.seed)
 
 
 # Create run directory
-model_name = "{:05d}_{}_lr{:.5f}_bs{}_gc{}_k{}_md{}".format(
-    args.exp_id, args.dataset, args.lr, args.batch_size, args.clip, args.kernel_size, args.max_dilation)
-if args.normalization != "none":
-    model_name = f"{model_name}_{args.normalization}"
-if args.exp_name:
-    model_name = f"{model_name}+{args.exp_name}"
-run_dir = os.path.join("runs", model_name)
-if args.mode == "train":
-    os.makedirs(run_dir, exist_ok=False)
+if args.run_dir:
+    run_dir = args.run_dir
+else:
+    _name = "{:05d}_{}_lr{:.5f}_bs{}_gc{}_k{}_md{}".format(
+        args.exp_id, args.dataset, args.lr, args.batch_size, args.clip, args.kernel_size, args.max_dilation)
+    if args.normalization != "none":
+        _name = f"{_name}_{args.normalization}"
+    if args.exp_name:
+        _name = f"{_name}+{args.exp_name}"
+    run_dir = os.path.join("runs", _name)
+    if args.mode == "train":
+        os.makedirs(run_dir, exist_ok=False)
+assert os.path.exists(run_dir), "Did not find run directory, check --run_dir argument"
 
 
 # Log arguments
 logger = configure_logger(os.path.join(run_dir, f"{args.mode}.log"))
-logger.info("Model name: %s", model_name)
 logger.info("Run directory: %s", run_dir)
 logger.info("Arguments: %s", args)
 for k, v in vars(args).items():
@@ -246,7 +252,7 @@ def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated):
 
 if args.mode == "train":
     logger.info("starting training")
-    writer = SummaryWriter(log_dir=os.path.join('runs', model_name))
+    writer = SummaryWriter(log_dir=run_dir)
     global_step = 0
     min_train_bpd = 1e12
     min_test_bpd = 1e12
