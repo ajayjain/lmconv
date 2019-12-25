@@ -337,32 +337,39 @@ if args.mode == "train":
 
             if (epoch + 1) % args.save_interval == 0: 
                 logger.info('saving model...')
-                torch.save({
-                    "epoch": epoch,
-                    "test_loss": test_bpd,
-                    "model_state_dict": model.module.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "args": vars(args),
-                }, os.path.join(run_dir, f"{args.exp_id}_ep{epoch}.pth"))
+                try:
+                    torch.save({
+                        "epoch": epoch,
+                        "test_loss": test_bpd,
+                        "model_state_dict": model.module.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "args": vars(args),
+                    }, os.path.join(run_dir, f"{args.exp_id}_ep{epoch}.pth"))
+                except Exception as e:
+                    logger.error("Failed to save checkpoint! Error: %s", e)
 
             if (epoch + 1) % args.sample_interval == 0: 
-                logging.info('sampling images with 0th (base) order...')
-                # TODO: Sample with random order
-                sample_t = sample(model, all_generation_idx[0])
-                sample_t = rescaling_inv(sample_t)
-                utils.save_image(sample_t, os.path.join(run_dir, f'tsample_{epoch}.png'), 
-                                 nrow=5, padding=0)
+                try:
+                    sample_order_i = np.random.randint(len(all_masks))
+                    logger.info('sampling images with ordering variant %d...', sample_order_i)
+                    sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i])
+                    sample_t = rescaling_inv(sample_t)
+                    utils.save_image(sample_t, os.path.join(run_dir, f'tsample_{epoch}.png'), 
+                                    nrow=5, padding=0)
+                except Exception as e:
+                    logger.error("Failed to sample images! Error: %s", e)
 elif args.mode == "sample":
     model.eval()
     with torch.no_grad():
-        logging.info('sampling images...')
-        sample_t = sample(model, all_generation_idx[0])
+        sample_order_i = np.random.randint(len(all_masks))
+        logger.info('sampling images with ordering variant %d...', sample_order_i)
+        sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i])
         sample_t = rescaling_inv(sample_t)
         utils.save_image(sample_t, os.path.join(run_dir, f'sample_{checkpoint_epochs}.png'),
                          nrow=5, padding=0)
 elif args.mode == "test":
     model.eval()
     with torch.no_grad():
-        logging.info('testing...')
+        logger.info('testing...')
         test_bpd = test(model, all_masks, test_loader, checkpoint_epochs)
-        logging.info('test loss : %s bpd' % test_bpd)
+        logger.info('test loss : %s bpd' % test_bpd)
