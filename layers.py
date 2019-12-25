@@ -218,7 +218,6 @@ class masked_conv2d(nn.Module):
 class input_masked_conv2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=(3,3), dilation=1):
         super(input_masked_conv2d, self).__init__()
-        assert dilation == 1
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size
@@ -227,7 +226,7 @@ class input_masked_conv2d(nn.Module):
         # Pad to maintain spatial dimensions
         pad0 = (dilation * (kernel_size[0] - 1)) // 2
         pad1 = (dilation * (kernel_size[1] - 1)) // 2
-        self.padding = (pad0, pad0, pad1, pad1)
+        self.padding = (pad0, pad1)
         
         # Conv parameters
         self.weight = Parameter(torch.Tensor(out_channels, in_channels, *kernel_size))
@@ -246,8 +245,7 @@ class input_masked_conv2d(nn.Module):
     def forward(self, x, mask=None):
         assert len(x.shape) == 4, "Unfold/fold only support 4D batched image-like tensors"
 
-        x_pad = torch.nn.functional.pad(x, self.padding)
-        x_unf = F.unfold(x_pad, self.kernel_size)
+        x_unf = F.unfold(x, self.kernel_size, dilation=self.dilation, padding=self.padding)
 
         if mask is not None:
             # Option 1: Repeat mask from 1x(k*k)xnum_patches to 1x(C*k*k)xnum_patches
