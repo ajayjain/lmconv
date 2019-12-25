@@ -70,7 +70,7 @@ parser.add_argument('-dp', '--dropout_prob', type=float, default=0.5,
                          'Argument only used if --ours is provided. Set to 0 to disable '
                          'dropout entirely.')
 parser.add_argument('-nm', '--normalization', type=str, default='weight_norm',
-                    choices=["none", "weight_norm"])
+                    choices=["none", "weight_norm", "instance_norm", "instance_norm_affine"])
 parser.add_argument('-af', '--accum_freq', type=int, default=1,
                     help='Batches per optimization step. Used for gradient accumulation')
 parser.add_argument('--two_stream', action="store_true", help="Enable two stream model")
@@ -154,6 +154,15 @@ else :
 # Construct model
 if args.ours:
     logger.info("Constructing our model")
+
+    if args.normalization == "instance_norm":
+        norm_op = lambda num_channels: nn.InstanceNorm2d(num_channels)
+    elif args.normalization == "instance_norm_affine":
+        norm_op = lambda num_channels: nn.InstanceNorm2d(num_channels, affine=True)
+    else:
+        norm_op = None
+
+    assert not args.two_stream, "--two_stream cannot be used with --ours"
     model = OurPixelCNN(
                 nr_resnet=args.nr_resnet,
                 nr_filters=args.nr_filters, 
@@ -162,7 +171,7 @@ if args.ours:
                 kernel_size=(args.kernel_size, args.kernel_size),
                 max_dilation=args.max_dilation,
                 weight_norm=(args.normalization == "weight_norm"),
-                two_stream=args.two_stream,
+                feature_norm_op=norm_op,
                 dropout_prob=args.dropout_prob)
 
     # Get generation orders
@@ -172,7 +181,8 @@ if args.ours:
     else:
         all_generation_idx = [base_generation_idx]
     if args.mode == "train":
-        plot_orders(all_generation_idx, obs, size=5, plot_rows=4, out_path=os.path.join(run_dir, "orderings.png"))
+        plot_orders(all_generation_idx, obs, size=5, plot_rows=min(len(all_generation_idx), 4),
+                    out_path=os.path.join(run_dir, "orderings.png"))
 
     # Make masks and plot
     all_masks = []

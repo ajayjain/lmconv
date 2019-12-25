@@ -129,28 +129,31 @@ skip connection parameter : 0 = no skip connection
                             2 = skip connection where skip input size === 2 * input size
 '''
 class gated_resnet(nn.Module):
-    def __init__(self, num_filters, conv_op, nonlinearity=concat_elu, skip_connection=0, dropout_prob=0.5):
+    def __init__(self, num_filters, conv_op, feature_norm_op=None, nonlinearity=concat_elu, skip_connection=0, dropout_prob=0.5):
         super(gated_resnet, self).__init__()
         self.skip_connection = skip_connection
         self.nonlinearity = nonlinearity
         self.conv_input = conv_op(2 * num_filters, num_filters) # cuz of concat elu
+        self.norm_input = feature_norm_op(num_filters) if feature_norm_op else identity
         
         if skip_connection != 0 : 
             self.nin_skip = nin(2 * skip_connection * num_filters, num_filters)
 
-        self.dropout = nn.Dropout2d(dropout_prob) if dropout_prob > 0.0 else None
+        self.dropout = nn.Dropout2d(dropout_prob) if dropout_prob > 0.0 else identity
         self.conv_out = conv_op(2 * num_filters, 2 * num_filters)
-
+        self.norm_out = feature_norm_op(num_filters) if feature_norm_op else identity
 
     def forward(self, og_x, a=None, mask=None):
         x = self.conv_input(self.nonlinearity(og_x), mask=mask)
+        x = self.norm_input(x)
         if a is not None : 
             x += self.nin_skip(self.nonlinearity(a))
         x = self.nonlinearity(x)
-        if self.dropout:
-            x = self.dropout(x)
+        x = self.dropout(x)
         x = self.conv_out(x, mask=mask)
         a, b = torch.chunk(x, 2, dim=1)
+        # TODO: Should x be normalized instead? or c3?
+        a = self.norm_out(a)
         c3 = a * torch.sigmoid(b)
         return og_x + c3
 
@@ -276,3 +279,6 @@ class input_masked_conv2d(nn.Module):
         out = F.fold(out_unf, output_shape, (1, 1))
 
         return out
+
+def identity(x):
+    x

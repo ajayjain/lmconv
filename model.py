@@ -13,12 +13,12 @@ class PixelCNNLayer_up(nn.Module):
         self.nr_resnet = nr_resnet
         # stream from pixels above
         self.u_stream = nn.ModuleList([gated_resnet(nr_filters, down_shifted_conv2d, 
-                                        resnet_nonlinearity, skip_connection=0) 
+                                        nonlinearity=resnet_nonlinearity, skip_connection=0) 
                                             for _ in range(nr_resnet)])
         
         # stream from pixels above and to thes left
         self.ul_stream = nn.ModuleList([gated_resnet(nr_filters, down_right_shifted_conv2d, 
-                                        resnet_nonlinearity, skip_connection=1) 
+                                        nonlinearity=resnet_nonlinearity, skip_connection=1) 
                                             for _ in range(nr_resnet)])
 
     def forward(self, u, ul):
@@ -39,12 +39,12 @@ class PixelCNNLayer_down(nn.Module):
         self.nr_resnet = nr_resnet
         # stream from pixels above
         self.u_stream  = nn.ModuleList([gated_resnet(nr_filters, down_shifted_conv2d, 
-                                        resnet_nonlinearity, skip_connection=1) 
+                                        nonlinearity=resnet_nonlinearity, skip_connection=1) 
                                             for _ in range(nr_resnet)])
         
         # stream from pixels above and to thes left
         self.ul_stream = nn.ModuleList([gated_resnet(nr_filters, down_right_shifted_conv2d, 
-                                        resnet_nonlinearity, skip_connection=2) 
+                                        nonlinearity=resnet_nonlinearity, skip_connection=2) 
                                             for _ in range(nr_resnet)])
 
     def forward(self, u, ul, u_list, ul_list):
