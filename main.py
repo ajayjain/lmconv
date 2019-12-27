@@ -80,6 +80,7 @@ parser.add_argument('--randomize_order', action="store_true", help="Randomize be
                     "pixel generation order.")
 parser.add_argument('--mode', type=str, choices=["train", "sample", "test"],
                     default="train")
+parser.add_argument('--no_bias', action="store_true", help="Disable learnable bias for all convolutions")
 
 args = parser.parse_args()
 assert args.normalization != "weight_norm", "Weight normalization manually disabled in layers.py"
@@ -172,7 +173,8 @@ if args.ours:
                 max_dilation=args.max_dilation,
                 weight_norm=(args.normalization == "weight_norm"),
                 feature_norm_op=norm_op,
-                dropout_prob=args.dropout_prob)
+                dropout_prob=args.dropout_prob,
+                conv_bias=(not args.no_bias))
 
     # Get generation orders
     base_generation_idx = get_generation_order_idx(args.order, obs[1], obs[2])

@@ -18,6 +18,9 @@ logger = logging.getLogger("gen")
 def wn(op):
     return op
 
+def identity(x):
+    return x
+
 class nin(nn.Module):
     def __init__(self, dim_in, dim_out):
         super(nin, self).__init__()
@@ -216,7 +219,7 @@ class masked_conv2d(nn.Module):
 
 
 class input_masked_conv2d(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=(3,3), dilation=1):
+    def __init__(self, in_channels, out_channels, kernel_size=(3,3), dilation=1, bias=True):
         super(input_masked_conv2d, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -230,7 +233,7 @@ class input_masked_conv2d(nn.Module):
         
         # Conv parameters
         self.weight = Parameter(torch.Tensor(out_channels, in_channels, *kernel_size))
-        self.bias = Parameter(torch.Tensor(out_channels))
+        self.bias = Parameter(torch.Tensor(out_channels)) if bias else None
 
         self.reset_parameters()
 
@@ -244,39 +247,30 @@ class input_masked_conv2d(nn.Module):
 
     def forward(self, x, mask=None):
         assert len(x.shape) == 4, "Unfold/fold only support 4D batched image-like tensors"
+        output_shape = (x.shape[2], x.shape[3])
+        C = x.shape[1]
 
-        x_unf = F.unfold(x, self.kernel_size, dilation=self.dilation, padding=self.padding)
+        x = F.unfold(x, self.kernel_size, dilation=self.dilation, padding=self.padding)
 
         if mask is not None:
             # Option 1: Repeat mask from 1x(k*k)xnum_patches to 1x(C*k*k)xnum_patches
             # mask_repeat = mask.repeat(1, x.size(1), 1)
             # x_unf = x_unf * mask_repeat
 
-            # Option 2: Repeat mask, replace values in place (slow, memory inefficient)
-            # mask_repeat = mask.repeat(x.size(0), x.size(1), 1)
-            # x_unf[mask_repeat == 1] = 0
-
             # Option 3: Avoid repeating mask in_channels times by reshaping x_unf (memory efficient)
-            C = x.size(1)
-            assert x_unf.size(1) % C == 0
-            x_unf_channels_batched = x_unf.view(x_unf.size(0) * C, x_unf.size(1) // C, x_unf.size(2))
-            x_unf = torch.mul(x_unf_channels_batched, mask).view(x_unf.shape)
+            assert x.size(1) % C == 0
+            x_unf_channels_batched = x.view(x.size(0) * C, x.size(1) // C, x.size(2))
+            x = torch.mul(x_unf_channels_batched, mask).view(x.shape)
         else:
             logger.warning("input_masked_conv2d not provided mask, not masking!")
 
         # Perform convolution via matrix multiplication and addition
         weight_matrix = self.weight.view(self.out_channels, -1)
-        out_unf = torch.einsum('ij,bjk->bik', weight_matrix, x_unf)
-        # out_unf = weight_matrix.matmul(x_unf)
-        # out_unf = x_unf.transpose(1, 2).matmul(weight_matrix.t()).transpose(1, 2)   # Note: equivalent to weight_matrix.matmul(x_unf), but
-                                                                                    # transposed version is faster via timeit test on cpu
-        out_unf = out_unf + self.bias.unsqueeze(0).unsqueeze(2)
+        x = torch.einsum('ij,bjk->bik', weight_matrix, x)
+        # x = weight_matrix.matmul(x)
+
+        if self.bias is not None:
+            x = x + self.bias.unsqueeze(0).unsqueeze(2)
 
         # Output shape is preserved due to input padding
-        output_shape = (x.shape[2], x.shape[3])
-        out = F.fold(out_unf, output_shape, (1, 1))
-
-        return out
-
-def identity(x):
-    x
+        return F.fold(x, output_shape, (1, 1))
