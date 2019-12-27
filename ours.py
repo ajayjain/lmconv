@@ -21,7 +21,7 @@ class OurPixelCNNLayer_up(nn.Module):
                                         resnet_nonlinearity, skip_connection=0, dropout_prob=dropout_prob) 
                                             for _ in range(nr_resnet)])
         
-    def forward(self, u, ul=None, mask=None):
+    def forward(self, u, mask=None):
         u_list = []
         for i in range(self.nr_resnet):
             u  = self.u_stream[i](u, mask=mask)
