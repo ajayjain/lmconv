@@ -99,13 +99,15 @@ class OurPixelCNN(nn.Module):
         x = x if sample else torch.cat((x, self.init_padding), 1)
 
         ###      UP PASS    ###
-        u_list  = [self.norm_init(self.u_init(x, mask=mask_init))]
+        u_list  = [self.norm_init(self.u_init(x, mask=mask_init), mask=mask_undilated)]  # mask_undilated passed intentionally
+                                                                                         # to norm so center pixel is 1,
+                                                                                         # preventing division by zero for OrderRescale
         # resnet block and dilation (RENAME: does not downsize)
         for i in range(2):
             u_list += self.up_layers[i](u_list[-1], mask=mask_undilated)
             u_list += [self.downsize_u_stream[i](u_list[-1], mask=mask_dilated)]
             if self.norm_ds:
-                u_list[-1] = self.norm_ds[i](u_list[-1])
+                u_list[-1] = self.norm_ds[i](u_list[-1], mask=mask_dilated)
         u_list += self.up_layers[2](u_list[-1], mask=mask_undilated)
 
         ###    DOWN PASS    ###
@@ -115,7 +117,7 @@ class OurPixelCNN(nn.Module):
             u = self.down_layers[i](u, u_list, mask=mask_undilated)
             u = self.upsize_u_stream[i](u, mask=mask_dilated)
             if self.norm_us:
-                u = self.norm_us[i](u)
+                u = self.norm_us[i](u, mask=mask_dilated)
         u = self.down_layers[2](u, u_list, mask=mask_undilated)
 
         x_out = self.nin_out(F.elu(u))

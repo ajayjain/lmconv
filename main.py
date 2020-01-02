@@ -70,7 +70,7 @@ parser.add_argument('-dp', '--dropout_prob', type=float, default=0.5,
                          'Argument only used if --ours is provided. Set to 0 to disable '
                          'dropout entirely.')
 parser.add_argument('-nm', '--normalization', type=str, default='weight_norm',
-                    choices=["none", "weight_norm", "instance_norm", "instance_norm_affine"])
+                    choices=["none", "weight_norm", "instance_norm", "instance_norm_affine", "order_rescale"])
 parser.add_argument('-af', '--accum_freq', type=int, default=1,
                     help='Batches per optimization step. Used for gradient accumulation')
 parser.add_argument('--two_stream', action="store_true", help="Enable two stream model")
@@ -157,9 +157,13 @@ if args.ours:
     logger.info("Constructing our model")
 
     if args.normalization == "instance_norm":
-        norm_op = lambda num_channels: nn.InstanceNorm2d(num_channels)
+        raise NotImplementedError("Causal instance norm not implemented")
+        # norm_op = lambda num_channels: nn.InstanceNorm2d(num_channels)
     elif args.normalization == "instance_norm_affine":
-        norm_op = lambda num_channels: nn.InstanceNorm2d(num_channels, affine=True)
+        raise NotImplementedError("Causal instance norm not implemented")
+        # norm_op = lambda num_channels: nn.InstanceNorm2d(num_channels, affine=True)
+    elif args.normalization == "order_rescale":
+        norm_op = lambda num_channels: OrderRescale()
     else:
         norm_op = None
 

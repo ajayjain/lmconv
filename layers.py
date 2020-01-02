@@ -18,7 +18,7 @@ logger = logging.getLogger("gen")
 def wn(op):
     return op
 
-def identity(x):
+def identity(x, *extra_args):
     return x
 
 class nin(nn.Module):
@@ -148,7 +148,7 @@ class gated_resnet(nn.Module):
 
     def forward(self, og_x, a=None, mask=None):
         x = self.conv_input(self.nonlinearity(og_x), mask=mask)
-        x = self.norm_input(x)
+        x = self.norm_input(x, mask=mask)
         if a is not None : 
             x += self.nin_skip(self.nonlinearity(a))
         x = self.nonlinearity(x)
@@ -156,7 +156,7 @@ class gated_resnet(nn.Module):
         x = self.conv_out(x, mask=mask)
         a, b = torch.chunk(x, 2, dim=1)
         # TODO: Should x be normalized instead? or c3?
-        a = self.norm_out(a)
+        a = self.norm_out(a, mask=mask)
         c3 = a * torch.sigmoid(b)
         return og_x + c3
 
@@ -274,3 +274,23 @@ class input_masked_conv2d(nn.Module):
 
         # Output shape is preserved due to input padding
         return F.fold(x, output_shape, (1, 1))
+
+
+class OrderRescale(nn.Module):
+    def forward(self, x, mask):
+        per_loc_sums = mask.sum(dim=1)
+        scale = per_loc_sums.view(1, 1, x.size(2), x.size(3))
+        assert torch.min(scale).item() >= 0.999
+        return x / scale
+
+
+def PONO(x, epsilon=1e-5):
+    """Positional normalization"""
+    mean = x.mean(dim=1, keepdim=True)
+    std = x.var(dim=1, keepdim=True).add(epsilon).sqrt()
+    output = (x - mean) / std
+    return output, mean, std
+
+def MS(x, beta, gamma):
+    """Moment shortcut"""
+    return x * gamma + beta
