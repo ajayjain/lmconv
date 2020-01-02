@@ -284,13 +284,16 @@ class OrderRescale(nn.Module):
         return x / scale
 
 
-def PONO(x, epsilon=1e-5):
+def pono(x, epsilon=1e-5):
     """Positional normalization"""
     mean = x.mean(dim=1, keepdim=True)
     std = x.var(dim=1, keepdim=True).add(epsilon).sqrt()
     output = (x - mean) / std
     return output, mean, std
 
-def MS(x, beta, gamma):
-    """Moment shortcut"""
-    return x * gamma + beta
+
+class PONO(nn.Module):
+    def forward(self, x, mask=None):
+        # NOTE: mask argument is unused
+        x, _, __ = pono(x)
+        return x

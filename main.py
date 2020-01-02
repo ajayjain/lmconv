@@ -70,7 +70,8 @@ parser.add_argument('-dp', '--dropout_prob', type=float, default=0.5,
                          'Argument only used if --ours is provided. Set to 0 to disable '
                          'dropout entirely.')
 parser.add_argument('-nm', '--normalization', type=str, default='weight_norm',
-                    choices=["none", "weight_norm", "instance_norm", "instance_norm_affine", "order_rescale"])
+                    choices=["none", "weight_norm", "instance_norm", "instance_norm_affine",
+                             "order_rescale", "pono"])
 parser.add_argument('-af', '--accum_freq', type=int, default=1,
                     help='Batches per optimization step. Used for gradient accumulation')
 parser.add_argument('--two_stream', action="store_true", help="Enable two stream model")
@@ -164,6 +165,8 @@ if args.ours:
         # norm_op = lambda num_channels: nn.InstanceNorm2d(num_channels, affine=True)
     elif args.normalization == "order_rescale":
         norm_op = lambda num_channels: OrderRescale()
+    elif args.normalization == "pono":
+        norm_op = lambda num_channels: PONO()
     else:
         norm_op = None
 
