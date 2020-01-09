@@ -82,6 +82,8 @@ parser.add_argument('--randomize_order', action="store_true", help="Randomize be
 parser.add_argument('--mode', type=str, choices=["train", "sample", "test"],
                     default="train")
 parser.add_argument('--no_bias', action="store_true", help="Disable learnable bias for all convolutions")
+parser.add_argument('--minimize_bpd', action="store_true", help="Minimize bpd, scaling loss down by number of dimension")
+parser.add_argument('--resize', type=int, default=-1)
 
 args = parser.parse_args()
 assert args.normalization != "weight_norm", "Weight normalization manually disabled in layers.py"
@@ -118,12 +120,17 @@ for k, v in vars(args).items():
 
 # Create data loaders
 sample_batch_size = 25
-obs = (1, 28, 28) if 'mnist' in args.dataset else (3, 32, 32)
-input_channels = obs[0]
+dataset_obs = (1, 28, 28) if 'mnist' in args.dataset else (3, 32, 32)
+input_channels = dataset_obs[0]
 rescaling     = lambda x : (x - .5) * 2.
 rescaling_inv = lambda x : .5 * x  + .5
 kwargs = {'num_workers':1, 'pin_memory':True, 'drop_last':True}
-ds_transforms = transforms.Compose([transforms.ToTensor(), rescaling])
+if args.resize > 0:
+    obs = (input_channels, args.resize, args.resize)
+    ds_transforms = transforms.Compose([transforms.Resize(args.resize), transforms.ToTensor(), rescaling])
+else:
+    obs = dataset_obs
+    ds_transforms = transforms.Compose([transforms.ToTensor(), rescaling])
 
 if 'mnist' in args.dataset :
     train_loader = torch.utils.data.DataLoader(datasets.MNIST(args.data_dir, download=True, 
@@ -286,6 +293,11 @@ if args.mode == "train":
             output = model(input, mask_init=all_masks[order_i][0], mask_undilated=all_masks[order_i][1], mask_dilated=all_masks[order_i][2])
 
             loss = loss_op(input, output)
+            deno = args.batch_size * np.prod(obs) * np.log(2.)
+            assert deno > 0, embed()
+            train_bpd = loss / deno
+            if args.minimize_bpd:
+                loss = train_bpd
 
             if batch_idx % args.accum_freq == 0:
                 optimizer.zero_grad()
@@ -308,15 +320,12 @@ if args.mode == "train":
                 optimizer.step()
             train_loss += loss.item()
 
-            deno = args.batch_size * np.prod(obs) * np.log(2.)
-            assert deno > 0, embed()
-            train_bpd = loss.item() / deno
-            writer.add_scalar('train/bpd', train_bpd, global_step)
-            min_train_bpd = min(min_train_bpd, train_bpd)
+            writer.add_scalar('train/bpd', train_bpd.item(), global_step)
+            min_train_bpd = min(min_train_bpd, train_bpd.item())
             writer.add_scalar('train/min_bpd', min_train_bpd, global_step)
 
-            if batch_idx >= 100 and (loss.item() / deno) >= 10:
-                logger.warning("WARNING: main.py: large batch loss {} bpd".format(loss.item() / deno))
+            if batch_idx >= 100 and train_bpd.item() >= 10:
+                logger.warning("WARNING: main.py: large batch loss {} bpd".format(train_bpd.item()))
 
             if (batch_idx + 1) % args.print_every == 0: 
                 deno = args.print_every * args.batch_size * np.prod(obs) * np.log(2.)
