@@ -14,11 +14,11 @@ from utils import *
 logger = logging.getLogger("gen")
 
 # DEBUG TO REMOVE WEIGHT NORMALIZATION
-# from torch.nn.utils import weight_norm as wn
-def wn(op):
-    return op
+from torch.nn.utils import weight_norm as wn
+# def wn(op):
+#     return op
 
-def identity(x, *extra_args):
+def identity(x, *extra_args, **extra_kwargs):
     return x
 
 class nin(nn.Module):
@@ -62,7 +62,8 @@ class down_shifted_conv2d(nn.Module):
         if shift_output_down :
             self.down_shift = lambda x : down_shift(x, pad=nn.ZeroPad2d((0, 0, 1, 0)))
     
-    def forward(self, x):
+    def forward(self, x, mask=None):
+        assert mask is None
         x = self.pad(x)
         x = self.conv(x)
         x = self.bn(x) if self.norm == 'batch_norm' else x
@@ -77,7 +78,8 @@ class down_shifted_deconv2d(nn.Module):
         self.filter_size = filter_size
         self.stride = stride
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
+        assert mask is None
         x = self.deconv(x)
         xs = [int(y) for y in x.size()]
         return x[:, :, :(xs[2] - self.filter_size[0] + 1), 
@@ -103,7 +105,8 @@ class down_right_shifted_conv2d(nn.Module):
         if shift_output_right :
             self.right_shift = lambda x : right_shift(x, pad=nn.ZeroPad2d((1, 0, 0, 0)))
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
+        assert mask is None
         x = self.pad(x)
         x = self.conv(x)
         x = self.bn(x) if self.norm == 'batch_norm' else x
@@ -119,7 +122,8 @@ class down_right_shifted_deconv2d(nn.Module):
         self.filter_size = filter_size
         self.stride = stride
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
+        assert mask is None
         x = self.deconv(x)
         xs = [int(y) for y in x.size()]
         x = x[:, :, :(xs[2] - self.filter_size[0] + 1):, :(xs[3] - self.filter_size[1] + 1)]

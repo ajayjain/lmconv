@@ -83,10 +83,11 @@ parser.add_argument('--mode', type=str, choices=["train", "sample", "test"],
                     default="train")
 parser.add_argument('--no_bias', action="store_true", help="Disable learnable bias for all convolutions")
 parser.add_argument('--minimize_bpd', action="store_true", help="Minimize bpd, scaling loss down by number of dimension")
-parser.add_argument('--resize', type=int, default=-1)
+parser.add_argument('--resize_sizes', type=int, nargs="*")
+parser.add_argument('--resize_probs', type=float, nargs="*")
 
 args = parser.parse_args()
-assert args.normalization != "weight_norm", "Weight normalization manually disabled in layers.py"
+# assert args.normalization != "weight_norm", "Weight normalization manually disabled in layers.py"
 
 
 # Set seed for reproducibility
@@ -124,33 +125,88 @@ dataset_obs = (1, 28, 28) if 'mnist' in args.dataset else (3, 32, 32)
 input_channels = dataset_obs[0]
 rescaling     = lambda x : (x - .5) * 2.
 rescaling_inv = lambda x : .5 * x  + .5
-kwargs = {'num_workers':1, 'pin_memory':True, 'drop_last':True}
-if args.resize > 0:
-    obs = (input_channels, args.resize, args.resize)
-    ds_transforms = transforms.Compose([transforms.Resize(args.resize), transforms.ToTensor(), rescaling])
+kwargs = {'num_workers':0, 'pin_memory':True, 'drop_last':True, 'batch_size':args.batch_size, 'shuffle':True}
+if args.resize_sizes:
+    if not args.resize_probs:
+        args.resize_probs = [1. / len(args.resize_sizes)] * len(args.resize_sizes)
+    assert len(args.resize_probs) == len(args.resize_sizes)
+    assert sum(args.resize_probs) == 1
+    resized_obses = [(input_channels, s, s) for s in args.resize_sizes]
+
+    # def _random_resize(im):
+    #     size = int(np.random.choice(args.resize_sizes, p=args.resize_probs))
+    #     print("resize sizes", args.resize_sizes, "probs", args.resize_probs)
+    #     print("Randomly resizing image to size", size, type(size), isinstance(size, int))
+    #     if size == dataset_obs[1]:
+    #         # No need to resize
+    #         return im
+    #     # Resize with bilinear interpolation
+    #     return transforms.Resize(size)(im)
+    # ds_transforms = transforms.Compose([
+    #     transforms.Lambda(_random_resize),
+    #     transforms.ToTensor(),
+    #     rescaling
+    # ])
+
+    # ds_transforms_by_obs = {
+    #     obs: transforms.Compose([
+    #         transforms.Resize(obs[1:]),
+    #         transforms.ToTensor(),
+    #         rescaling
+    #     ]) for obs in resized_obses
+    # }
 else:
-    obs = dataset_obs
-    ds_transforms = transforms.Compose([transforms.ToTensor(), rescaling])
+    args.resize_sizes = [dataset_obs[1]]
+    args.resize_probs = [1.]
+    resized_obses = [dataset_obs]
 
+def obs2str(obs):
+    return 'x'.join(map(str, obs))
+
+def random_resized_obs():
+    idx = np.arange(len(resized_obses))
+    obs_i = np.random.choice(idx, p=args.resize_probs)
+    return resized_obses[int(obs_i)]
+
+def get_resize_collate_fn(obs):
+    if obs == dataset_obs:
+        return torch.utils.data.dataloader.default_collate
+
+    def resize_collate_fn(batch):
+        X, y = torch.utils.data.dataloader.default_collate(batch)
+        X = torch.nn.functional.interpolate(X, size=obs[1:], mode="bilinear")
+        return [X, y]
+    return resize_collate_fn
+
+def random_resize_collate(batch):
+    X, y = torch.utils.data.dataloader.default_collate(batch)
+    obs = random_resized_obs()
+    if obs != dataset_obs:
+        X = torch.nn.functional.interpolate(X, size=obs[1:], mode="bilinear")
+    return [X, y]
+
+# Create data loaders
+ds_transforms = transforms.Compose([transforms.ToTensor(), rescaling])
 if 'mnist' in args.dataset :
-    train_loader = torch.utils.data.DataLoader(datasets.MNIST(args.data_dir, download=True, 
-                        train=True, transform=ds_transforms), batch_size=args.batch_size, 
-                            shuffle=True, **kwargs)
+    train_loader = torch.utils.data.DataLoader(datasets.MNIST(args.data_dir, download=True,
+        train=True, transform=ds_transforms), collate_fn=random_resize_collate, **kwargs)
 
-    test_loader  = torch.utils.data.DataLoader(datasets.MNIST(args.data_dir, train=False, 
-                    transform=ds_transforms), batch_size=args.batch_size, shuffle=True, **kwargs)
+    test_loader_by_obs = {
+        obs: torch.utils.data.DataLoader(datasets.MNIST(args.data_dir, train=False,
+            transform=ds_transforms), collate_fn=get_resize_collate_fn(obs), **kwargs)
+        for obs in resized_obses
+    }
 
     logger.info("Using unaveraged loss discretized_mix_logistic_loss_1d, averaged loss discretized_mix_logistic_loss_1d_averaged")
     loss_op = lambda real, fake : discretized_mix_logistic_loss_1d(real, fake)
     loss_op_overaged = lambda real, fakes : discretized_mix_logistic_loss_1d_averaged(real, fakes)
     sample_op = lambda x : sample_from_discretized_mix_logistic_1d(x, args.nr_logistic_mix)
-
 elif 'cifar' in args.dataset :
     train_loader = torch.utils.data.DataLoader(datasets.CIFAR10(args.data_dir, train=True, 
-        download=True, transform=ds_transforms), batch_size=args.batch_size, shuffle=True, **kwargs)
+        download=True, transform=ds_transforms), **kwargs)
 
     test_loader  = torch.utils.data.DataLoader(datasets.CIFAR10(args.data_dir, train=False, 
-                    transform=ds_transforms), batch_size=args.batch_size, shuffle=True, **kwargs)
+                    transform=ds_transforms), **kwargs)
 
     logger.info("Using loss discretized_mix_logistic_loss")
     loss_op   = lambda real, fake : discretized_mix_logistic_loss(real, fake)
@@ -190,31 +246,39 @@ if args.ours:
                 dropout_prob=args.dropout_prob,
                 conv_bias=(not args.no_bias))
 
-    # Get generation orders
-    base_generation_idx = get_generation_order_idx(args.order, obs[1], obs[2])
-    if args.randomize_order:
-        all_generation_idx = augment_orders(base_generation_idx, obs)
-    else:
-        all_generation_idx = [base_generation_idx]
-    if args.mode == "train":
-        plot_orders(all_generation_idx, obs, size=5, plot_rows=min(len(all_generation_idx), 4),
-                    out_path=os.path.join(run_dir, "orderings.png"))
+    all_generation_idx_by_obs = {}
+    all_masks_by_obs = {}
+    for obs in resized_obses:
+        # Get generation orders
+        base_generation_idx = get_generation_order_idx(args.order, obs[1], obs[2])
+        if args.randomize_order:
+            all_generation_idx = augment_orders(base_generation_idx, obs)
+        else:
+            all_generation_idx = [base_generation_idx]
+        if args.mode == "train":
+            plot_orders(all_generation_idx, obs, size=5, plot_rows=min(len(all_generation_idx), 4),
+                        out_path=os.path.join(run_dir, f"orderings_obs{obs2str(obs)}.png"))
+        all_generation_idx_by_obs[obs] = all_generation_idx
 
-    # Make masks and plot
-    all_masks = []
-    for i, generation_idx in enumerate(all_generation_idx):
-        masks = get_masks(generation_idx, obs[1], obs[2], args.kernel_size, args.max_dilation,
-                          run_dir, plot_suffix=f"order{i}", plot=False)#(args.mode == "train"))
-        logger.info(f"Mask shapes: {masks[0].shape}, {masks[1].shape}, {masks[2].shape}")
-        all_masks.append(masks)
+        # Make masks and plot
+        all_masks = []
+        for i, generation_idx in enumerate(all_generation_idx):
+            masks = get_masks(generation_idx, obs[1], obs[2], args.kernel_size, args.max_dilation,
+                            run_dir, plot_suffix=f"obs{obs2str(obs)}_order{i}", plot=False)#(args.mode == "train"))
+            logger.info(f"Mask shapes: {masks[0].shape}, {masks[1].shape}, {masks[2].shape}")
+            all_masks.append(masks)
+        all_masks_by_obs[obs] = all_masks
 else:
     logger.info("Constructing original PixelCNN++")
     model = PixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
                 input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix)
 
     assert not args.randomize_order
-    all_generation_idx = [get_generation_order_idx("raster_scan", obs[1], obs[2])]
-    all_masks = [(None, None, None)]
+    all_generation_idx_by_obs = {}
+    all_masks_by_obs = {}
+    for obs in resized_obses:
+        all_generation_idx_by_obs[obs] = [get_generation_order_idx("raster_scan", obs[1], obs[2])]
+        all_masks_by_obs[obs] = [(None, None, None)]
 model = nn.DataParallel(model)
 model = model.cuda()
 
@@ -222,8 +286,12 @@ model = model.cuda()
 # Load model parameters from checkpoint
 if args.load_params:
     # TODO: Restore optimizer
-    checkpoint_epochs = load_part_of_model(args.load_params, model=model.module, optimizer=None)
-    logger.info(f"Model parameters loaded, from after {checkpoint_epochs} training epochs")
+    if os.path.exists(args.load_params):
+        load_params = args.load_params
+    else:
+        load_params = os.path.join(run_dir, args.load_params)
+    checkpoint_epochs = load_part_of_model(load_params, model=model.module, optimizer=None)
+    logger.info(f"Model parameters loaded from {load_params}, from after {checkpoint_epochs} training epochs")
 else:
     checkpoint_epochs = -1
 
@@ -234,10 +302,12 @@ optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_
 scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=args.lr_decay)
 
 
-def test(model, all_masks, test_loader, epoch="N/A"):
+def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True):
     logger.info(f"Testing with ensemble of {len(all_masks)} orderings")
     test_loss = 0.
-    for batch_idx, (input,_) in enumerate(tqdm.tqdm(test_loader, desc=f"Test after epoch {epoch}")):
+    for batch_idx, (input,_) in enumerate(tqdm.tqdm(test_loader,
+                                                    desc=f"Test after epoch {epoch}",
+                                                    disable=(not progress_bar))):
         input = input.cuda(non_blocking=True)
         input_var = Variable(input)
 
@@ -281,7 +351,7 @@ if args.mode == "train":
     writer = SummaryWriter(log_dir=run_dir)
     global_step = 0
     min_train_bpd = 1e12
-    min_test_bpd = 1e12
+    min_test_bpd_by_obs = {obs: 1e12 for obs in resized_obses}
     for epoch in range(checkpoint_epochs + 1, args.max_epochs):
         train_loss = 0.
         time_ = time.time()
@@ -289,6 +359,8 @@ if args.mode == "train":
         for batch_idx, (input,_) in enumerate(tqdm.tqdm(train_loader, desc=f"Train epoch {epoch}")):
             input = input.cuda(non_blocking=True)
 
+            obs = random_resized_obs()
+            all_masks = all_masks_by_obs[obs]
             order_i = np.random.randint(len(all_masks))
             output = model(input, mask_init=all_masks[order_i][0], mask_undilated=all_masks[order_i][1], mask_dilated=all_masks[order_i][2])
 
@@ -329,8 +401,9 @@ if args.mode == "train":
 
             if (batch_idx + 1) % args.print_every == 0: 
                 deno = args.print_every * args.batch_size * np.prod(obs) * np.log(2.)
+                average_bpd = train_loss / args.print_every if args.minimize_bpd else train_loss / deno
                 logger.info('train bpd : {:.4f}, train loss : {:.1f}, time : {:.4f}, global step: {}'.format(
-                    (train_loss / deno),
+                    average_bpd,
                     train_loss,
                     (time.time() - time_),
                     global_step))
@@ -345,49 +418,70 @@ if args.mode == "train":
 
         model.eval()
         with torch.no_grad():
-            test_bpd = test(model, all_masks, test_loader, epoch)
-            writer.add_scalar('test/bpd', test_bpd, global_step)
-            logger.info('test loss : %s' % test_bpd)
+            save_dict = {}
 
-            # Log min test bpd for smoothness
-            min_test_bpd = min(min_test_bpd, test_bpd)
-            writer.add_scalar('test/min_bpd', min_test_bpd, global_step)
+            for obs in resized_obses:
+                logger.info(f"testing with obs {obs2str(obs)}...")
+                test_bpd = test(model,
+                                all_masks_by_obs[obs],
+                                test_loader_by_obs[obs],
+                                epoch,
+                                progress_bar=True)
+                writer.add_scalar(f'test/bpd_{obs2str(obs)}', test_bpd, global_step)
+                logger.info(f"test loss for obs {obs2str(obs)}: %s bpd" % test_bpd)
+                save_dict[f"test_loss_{obs2str(obs)}"] = test_bpd
+
+                # Log min test bpd for smoothness
+                min_test_bpd_by_obs[obs] = min(min_test_bpd_by_obs[obs], test_bpd)
+                writer.add_scalar(f'test/min_bpd_{obs2str(obs)}', min_test_bpd_by_obs[obs], global_step)
+                if obs == dataset_obs:
+                    writer.add_scalar(f'test/bpd', test_bpd, global_step)
+                    writer.add_scalar(f'test/min_bpd', min_test_bpd_by_obs[obs], global_step)
 
             if (epoch + 1) % args.save_interval == 0: 
                 logger.info('saving model...')
+                save_dict["epoch"] = epoch
+                save_dict["args"] = vars(args)
                 try:
-                    torch.save({
-                        "epoch": epoch,
-                        "test_loss": test_bpd,
-                        "model_state_dict": model.module.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "args": vars(args),
-                    }, os.path.join(run_dir, f"{args.exp_id}_ep{epoch}.pth"))
+                    save_dict["model_state_dict"] = model.module.state_dict()
+                    save_dict["optimizer_state_dict"] = optimizer.state_dict()
+                    torch.save(save_dict, os.path.join(run_dir, f"{args.exp_id}_ep{epoch}.pth"))
                 except Exception as e:
                     logger.error("Failed to save checkpoint! Error: %s", e)
 
             if (epoch + 1) % args.sample_interval == 0: 
-                try:
-                    sample_order_i = np.random.randint(len(all_masks))
-                    logger.info('sampling images with ordering variant %d...', sample_order_i)
-                    sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i])
-                    sample_t = rescaling_inv(sample_t)
-                    utils.save_image(sample_t, os.path.join(run_dir, f'tsample_{epoch}.png'), 
-                                    nrow=5, padding=0)
-                except Exception as e:
-                    logger.error("Failed to sample images! Error: %s", e)
+                for obs in resized_obses:
+                    try:
+                        all_masks = all_masks_by_obs[obs]
+                        all_generation_idx = all_generation_idx_by_obs[obs]
+                        sample_order_i = np.random.randint(len(all_masks))
+                        logger.info('sampling images with observation %s, ordering variant %d...', obs2str(obs), sample_order_i)
+                        sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i])
+                        sample_t = rescaling_inv(sample_t)
+                        utils.save_image(sample_t, os.path.join(run_dir, f"tsample_obs{obs2str(obs)}_{epoch}_order{sample_order_i}.png"), 
+                                         nrow=5, padding=0)
+                    except Exception as e:
+                        logger.error("Failed to sample images! Error: %s", e)
 elif args.mode == "sample":
     model.eval()
     with torch.no_grad():
-        sample_order_i = np.random.randint(len(all_masks))
-        logger.info('sampling images with ordering variant %d...', sample_order_i)
-        sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i])
-        sample_t = rescaling_inv(sample_t)
-        utils.save_image(sample_t, os.path.join(run_dir, f'sample_{checkpoint_epochs}.png'),
-                         nrow=5, padding=0)
+        for obs in resized_obses:
+            all_masks = all_masks_by_obs[obs]
+            all_generation_idx = all_generation_idx_by_obs[obs]
+            sample_order_i = np.random.randint(len(all_masks))
+            logger.info('sampling images with observation %s, ordering variant %d...', obs2str(obs), sample_order_i)
+            sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i])
+            sample_t = rescaling_inv(sample_t)
+            utils.save_image(sample_t, os.path.join(run_dir, f'sample_obs{obs2str(obs)}_{checkpoint_epochs}_order{sample_order_i}.png'),
+                             nrow=5, padding=0)
 elif args.mode == "test":
     model.eval()
     with torch.no_grad():
-        logger.info('testing...')
-        test_bpd = test(model, all_masks, test_loader, checkpoint_epochs)
-        logger.info('test loss : %s bpd' % test_bpd)
+        for obs in resized_obses:
+            logger.info(f"testing with obs {obs2str(obs)}...")
+            test_bpd = test(model,
+                            all_masks_by_obs[obs],
+                            test_loader_by_obs[obs],
+                            checkpoint_epochs,
+                            progress_bar=False)
+            logger.info(f"test loss for obs {obs2str(obs)}: %s bpd" % test_bpd)
