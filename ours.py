@@ -84,12 +84,12 @@ class OurPixelCNN(nn.Module):
         self.nin_out = nin(nr_filters, num_mix * nr_logistic_mix)
 
     def forward(self, x, sample=False, mask_init=None, mask_undilated=None, mask_dilated=None):
-        # similar as done in the tf repo :  
-        if self.init_padding is None and not sample: 
+        # similar as done in the tf repo. remake init_padding if input height or width change :  
+        if not sample and (self.init_padding is None or self.init_padding.shape[2:] != x.shape[2:]) :
             xs = [int(y) for y in x.size()]
             padding = Variable(torch.ones(xs[0], 1, xs[2], xs[3]), requires_grad=False)
             self.init_padding = padding.cuda() if x.is_cuda else padding
-        
+
         if sample : 
             xs = [int(y) for y in x.size()]
             padding = Variable(torch.ones(xs[0], 1, xs[2], xs[3]), requires_grad=False)

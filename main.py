@@ -336,10 +336,11 @@ if args.mode == "train":
         for batch_idx, (input,_) in enumerate(tqdm.tqdm(train_loader, desc=f"Train epoch {epoch}")):
             input = input.cuda(non_blocking=True)
 
-            obs = random_resized_obs()
+            obs = input.shape[1:]
             all_masks = all_masks_by_obs[obs]
             order_i = np.random.randint(len(all_masks))
-            output = model(input, mask_init=all_masks[order_i][0], mask_undilated=all_masks[order_i][1], mask_dilated=all_masks[order_i][2])
+            mask_init, mask_undilated, mask_dilated = all_masks[order_i]
+            output = model(input, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
 
             loss = loss_op(input, output)
             deno = args.batch_size * np.prod(obs) * np.log(2.)
@@ -355,8 +356,8 @@ if args.mode == "train":
                 if args.clip > 0:
                     # Compute and rescale gradient norm
                     gradient_norm = nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-                    if gradient_norm > args.clip:
-                        logger.warning(f"Clipped gradients to norm {args.clip}")
+                    # if gradient_norm > args.clip:
+                        # logger.warning(f"Clipped gradients to norm {args.clip}")
                 else:
                     # Just compute the gradient norm
                     parameters = list(filter(lambda p: p.grad is not None, model.parameters()))
