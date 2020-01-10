@@ -176,7 +176,7 @@ if 'mnist' in args.dataset :
 
     logger.info("Using unaveraged loss discretized_mix_logistic_loss_1d, averaged loss discretized_mix_logistic_loss_1d_averaged")
     loss_op = lambda real, fake : discretized_mix_logistic_loss_1d(real, fake)
-    loss_op_overaged = lambda real, fakes : discretized_mix_logistic_loss_1d_averaged(real, fakes)
+    loss_op_averaged = lambda real, fakes : discretized_mix_logistic_loss_1d_averaged(real, fakes)
     sample_op = lambda x : sample_from_discretized_mix_logistic_1d(x, args.nr_logistic_mix)
 elif 'cifar' in args.dataset :
     train_loader = torch.utils.data.DataLoader(datasets.CIFAR10(args.data_dir, train=True, 
@@ -297,7 +297,7 @@ def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True):
         for mask_init, mask_undilated, mask_dilated in all_masks:
             output = model(input_var, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
             outputs.append(output)
-        loss = loss_op_overaged(input_var, outputs)
+        loss = loss_op_averaged(input_var, outputs)
 
         test_loss += loss.item()
         del loss, output
@@ -382,7 +382,7 @@ if args.mode == "train":
                 average_bpd = train_loss / args.print_every if args.minimize_bpd else train_loss / deno
                 logger.info('train bpd : {:.4f}, train loss : {:.1f}, time : {:.4f}, global step: {}'.format(
                     average_bpd,
-                    train_loss,
+                    train_loss / args.print_every,
                     (time.time() - time_),
                     global_step))
                 train_loss = 0.
