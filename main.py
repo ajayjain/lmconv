@@ -125,36 +125,13 @@ dataset_obs = (1, 28, 28) if 'mnist' in args.dataset else (3, 32, 32)
 input_channels = dataset_obs[0]
 rescaling     = lambda x : (x - .5) * 2.
 rescaling_inv = lambda x : .5 * x  + .5
-kwargs = {'num_workers':0, 'pin_memory':True, 'drop_last':True, 'batch_size':args.batch_size, 'shuffle':True}
+kwargs = {'num_workers':1, 'pin_memory':True, 'drop_last':True, 'batch_size':args.batch_size, 'shuffle':True}
 if args.resize_sizes:
     if not args.resize_probs:
         args.resize_probs = [1. / len(args.resize_sizes)] * len(args.resize_sizes)
     assert len(args.resize_probs) == len(args.resize_sizes)
     assert sum(args.resize_probs) == 1
     resized_obses = [(input_channels, s, s) for s in args.resize_sizes]
-
-    # def _random_resize(im):
-    #     size = int(np.random.choice(args.resize_sizes, p=args.resize_probs))
-    #     print("resize sizes", args.resize_sizes, "probs", args.resize_probs)
-    #     print("Randomly resizing image to size", size, type(size), isinstance(size, int))
-    #     if size == dataset_obs[1]:
-    #         # No need to resize
-    #         return im
-    #     # Resize with bilinear interpolation
-    #     return transforms.Resize(size)(im)
-    # ds_transforms = transforms.Compose([
-    #     transforms.Lambda(_random_resize),
-    #     transforms.ToTensor(),
-    #     rescaling
-    # ])
-
-    # ds_transforms_by_obs = {
-    #     obs: transforms.Compose([
-    #         transforms.Resize(obs[1:]),
-    #         transforms.ToTensor(),
-    #         rescaling
-    #     ]) for obs in resized_obses
-    # }
 else:
     args.resize_sizes = [dataset_obs[1]]
     args.resize_probs = [1.]
