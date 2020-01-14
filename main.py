@@ -86,6 +86,8 @@ parser.add_argument('--no_bias', action="store_true", help="Disable learnable bi
 parser.add_argument('--minimize_bpd', action="store_true", help="Minimize bpd, scaling loss down by number of dimension")
 parser.add_argument('--resize_sizes', type=int, nargs="*")
 parser.add_argument('--resize_probs', type=float, nargs="*")
+# memory
+parser.add_argument('--rematerialize', action="store_true", help="Recompute some activations during backwards to save memory")
 
 args = parser.parse_args()
 # assert args.normalization != "weight_norm", "Weight normalization manually disabled in layers.py"
@@ -178,6 +180,10 @@ if 'mnist' in args.dataset :
             transform=ds_transforms), collate_fn=get_resize_collate_fn(obs), **data_loader_kwargs)
         for obs in resized_obses
     }
+
+    # Default upper bounds for progress bars
+    train_total = None
+    test_total = None
 elif 'cifar' in args.dataset :
     rescaling = lambda x : (x - .5) * 2.  # rescale [0, 1] images into [-1, 1] range
     rescaling_inv = lambda x : .5 * x + .5
@@ -190,24 +196,37 @@ elif 'cifar' in args.dataset :
             transform=ds_transforms), collate_fn=get_resize_collate_fn(obs), **data_loader_kwargs)
         for obs in resized_obses
     }
+
+    # Default upper bounds for progress bars
+    train_total = None
+    test_total = None
 elif 'celebahq' in args.dataset :
     rescaling = lambda x : (2. / 255) * x - 1.  # rescale uint8 images into [-1, 1] range
     rescaling_inv = lambda x : (255. / 2) * (x + 1.)
 
     # NOTE: Random resizing of images during training is not supported for CelebA-HQ. Will use 256x256 resolution.
-    from celeba_data import get_celeba_dataloader
-    del data_loader_kwargs["num_workers"]
-    train_loader = get_celeba_dataloader(args.data_dir, "train",
-                                         collate_fn=itemgetter(0),
-                                         batch_transform=rescaling,
-                                         **data_loader_kwargs)
-    test_loader_by_obs = {
-        obs: get_celeba_dataloader(args.data_dir, "validation",
-                                   collate_fn=get_resize_collate_fn(obs, itemgetter(0)),
-                                   batch_transform=rescaling,
-                                   **data_loader_kwargs)
-        for obs in resized_obses
-    }
+    def get_celeba_dataloaders():
+        from celeba_data import get_celeba_dataloader
+        kwargs = dict(data_loader_kwargs)
+        kwargs["num_workers"] = 0
+        train_loader = get_celeba_dataloader(args.data_dir, "train",
+                                            collate_fn=itemgetter(0),
+                                            batch_transform=rescaling,
+                                            **kwargs)
+        test_loader_by_obs = {
+            obs: get_celeba_dataloader(args.data_dir, "validation",
+                                    collate_fn=get_resize_collate_fn(obs, itemgetter(0)),
+                                    batch_transform=rescaling,
+                                    **kwargs)
+            for obs in resized_obses
+        }
+        return train_loader, test_loader_by_obs
+
+    train_loader, test_loader_by_obs = get_celeba_dataloaders()
+
+    # Manually specify upper bounds for progress bars
+    train_total = 27000
+    test_total = 3000
 else :
     raise Exception('{} dataset not in {mnist, cifar10}'.format(args.dataset))
 
@@ -243,6 +262,7 @@ if args.ours:
         norm_op = None
 
     assert not args.two_stream, "--two_stream cannot be used with --ours"
+    # TODO: Add rematerialization
     model = OurPixelCNN(
                 nr_resnet=args.nr_resnet,
                 nr_filters=args.nr_filters, 
@@ -280,7 +300,8 @@ if args.ours:
 else:
     logger.info("Constructing original PixelCNN++")
     model = PixelCNN(nr_resnet=args.nr_resnet, nr_filters=args.nr_filters, 
-                input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix)
+                input_channels=input_channels, nr_logistic_mix=args.nr_logistic_mix,
+                rematerialize=args.rematerialize)
 
     assert not args.randomize_order
     all_generation_idx_by_obs = {}
@@ -316,7 +337,8 @@ def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True):
     test_loss = 0.
     for batch_idx, (input,_) in enumerate(tqdm.tqdm(test_loader,
                                                     desc=f"Test after epoch {epoch}",
-                                                    disable=(not progress_bar))):
+                                                    disable=(not progress_bar),
+                                                    total=test_total)):
         input = input.cuda(non_blocking=True)
         input_var = Variable(input)
 
@@ -365,7 +387,7 @@ if args.mode == "train":
         train_loss = 0.
         time_ = time.time()
         model.train()
-        for batch_idx, (input,_) in enumerate(tqdm.tqdm(train_loader, desc=f"Train epoch {epoch}")):
+        for batch_idx, (input,_) in enumerate(tqdm.tqdm(train_loader, desc=f"Train epoch {epoch}", total=train_total)):
             input = input.cuda(non_blocking=True)
 
             obs = input.shape[1:]
@@ -472,6 +494,10 @@ if args.mode == "train":
                                          nrow=5, padding=0)
                     except Exception as e:
                         logger.error("Failed to sample images! Error: %s", e)
+        
+        if "celeba" in args.dataset:
+            # Need to manually re-create loaders to reset
+            train_loader, test_loader_by_obs = get_celeba_dataloaders()
 elif args.mode == "sample":
     model.eval()
     with torch.no_grad():

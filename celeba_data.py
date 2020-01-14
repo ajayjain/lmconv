@@ -41,7 +41,6 @@ class TFRecordIterableDataset(torch.utils.data.IterableDataset):
         dset = files.apply(tf.data.TFRecordDataset)
         if is_training:
             dset = dset.shuffle(buffer_size=batch_size * _SHUFFLE_FACTOR)
-        dset = dset.repeat()
         dset = dset.map(lambda x: parse_tfrecord_into_tf_tensor(x, resolution),
                         num_parallel_calls=tf_num_parallel_map)
         dset = dset.batch(batch_size)
