@@ -1,5 +1,6 @@
 from IPython import embed
 import argparse
+from operator import itemgetter
 import os
 import time
 
@@ -25,7 +26,7 @@ parser.add_argument('-i', '--data_dir', type=str,
 parser.add_argument('-o', '--save_dir', type=str, default='models',
                     help='Location for parameter checkpoints and samples')
 parser.add_argument('-d', '--dataset', type=str,
-                    default='cifar', help='Can be either cifar|mnist')
+                    default='cifar', help='Can be either cifar|mnist|celeba')
 parser.add_argument('-p', '--print_every', type=int, default=20,
                     help='how many iterations between print statements')
 parser.add_argument('-t', '--save_interval', type=int, default=20,
@@ -121,11 +122,13 @@ for k, v in vars(args).items():
 
 # Create data loaders
 sample_batch_size = 25
-dataset_obs = (1, 28, 28) if 'mnist' in args.dataset else (3, 32, 32)
+dataset_obs = {
+    'mnist': (1, 28, 28),
+    'cifar': (3, 32, 32),
+    'celebahq': (3, 256, 256)
+}[args.dataset]
 input_channels = dataset_obs[0]
-rescaling     = lambda x : (x - .5) * 2.
-rescaling_inv = lambda x : .5 * x  + .5
-kwargs = {'num_workers':1, 'pin_memory':True, 'drop_last':True, 'batch_size':args.batch_size, 'shuffle':True}
+data_loader_kwargs = {'num_workers':1, 'pin_memory':True, 'drop_last':True, 'batch_size':args.batch_size}
 if args.resize_sizes:
     if not args.resize_probs:
         args.resize_probs = [1. / len(args.resize_sizes)] * len(args.resize_sizes)
@@ -145,12 +148,12 @@ def random_resized_obs():
     obs_i = np.random.choice(idx, p=args.resize_probs)
     return resized_obses[int(obs_i)]
 
-def get_resize_collate_fn(obs):
+def get_resize_collate_fn(obs, default_collate=torch.utils.data.dataloader.default_collate):
     if obs == dataset_obs:
-        return torch.utils.data.dataloader.default_collate
+        return default_collate
 
     def resize_collate_fn(batch):
-        X, y = torch.utils.data.dataloader.default_collate(batch)
+        X, y = default_collate(batch)
         X = torch.nn.functional.interpolate(X, size=obs[1:], mode="bilinear")
         return [X, y]
     return resize_collate_fn
@@ -163,34 +166,63 @@ def random_resize_collate(batch):
     return [X, y]
 
 # Create data loaders
-ds_transforms = transforms.Compose([transforms.ToTensor(), rescaling])
 if 'mnist' in args.dataset :
-    train_loader = torch.utils.data.DataLoader(datasets.MNIST(args.data_dir, download=True,
-        train=True, transform=ds_transforms), collate_fn=random_resize_collate, **kwargs)
+    rescaling = lambda x : (x - .5) * 2.  # rescale [0, 1] images into [-1, 1] range
+    rescaling_inv = lambda x : .5 * x + .5
+    ds_transforms = transforms.Compose([transforms.ToTensor(), rescaling])
 
+    train_loader = torch.utils.data.DataLoader(datasets.MNIST(args.data_dir, download=True,
+        train=True, transform=ds_transforms), shuffle=True, collate_fn=random_resize_collate, **data_loader_kwargs)
     test_loader_by_obs = {
         obs: torch.utils.data.DataLoader(datasets.MNIST(args.data_dir, train=False,
-            transform=ds_transforms), collate_fn=get_resize_collate_fn(obs), **kwargs)
+            transform=ds_transforms), collate_fn=get_resize_collate_fn(obs), **data_loader_kwargs)
         for obs in resized_obses
     }
-
-    logger.info("Using unaveraged loss discretized_mix_logistic_loss_1d, averaged loss discretized_mix_logistic_loss_1d_averaged")
-    loss_op = lambda real, fake : discretized_mix_logistic_loss_1d(real, fake)
-    loss_op_averaged = lambda real, fakes : discretized_mix_logistic_loss_1d_averaged(real, fakes)
-    sample_op = lambda x : sample_from_discretized_mix_logistic_1d(x, args.nr_logistic_mix)
 elif 'cifar' in args.dataset :
+    rescaling = lambda x : (x - .5) * 2.  # rescale [0, 1] images into [-1, 1] range
+    rescaling_inv = lambda x : .5 * x + .5
+    ds_transforms = transforms.Compose([transforms.ToTensor(), rescaling])
+
     train_loader = torch.utils.data.DataLoader(datasets.CIFAR10(args.data_dir, train=True, 
-        download=True, transform=ds_transforms), **kwargs)
+        download=True, transform=ds_transforms), shuffle=True, collate_fn=random_resize_collate, **data_loader_kwargs)
+    test_loader_by_obs = {
+        obs: torch.utils.data.DataLoader(datasets.CIFAR10(args.data_dir, train=False,
+            transform=ds_transforms), collate_fn=get_resize_collate_fn(obs), **data_loader_kwargs)
+        for obs in resized_obses
+    }
+elif 'celebahq' in args.dataset :
+    rescaling = lambda x : (2. / 255) * x - 1.  # rescale uint8 images into [-1, 1] range
+    rescaling_inv = lambda x : (255. / 2) * (x + 1.)
 
-    test_loader  = torch.utils.data.DataLoader(datasets.CIFAR10(args.data_dir, train=False, 
-                    transform=ds_transforms), **kwargs)
-
-    logger.info("Using loss discretized_mix_logistic_loss")
-    loss_op   = lambda real, fake : discretized_mix_logistic_loss(real, fake)
-    # TODO: implement loss_op_averaged
-    sample_op = lambda x : sample_from_discretized_mix_logistic(x, args.nr_logistic_mix)
+    # NOTE: Random resizing of images during training is not supported for CelebA-HQ. Will use 256x256 resolution.
+    from celeba_data import get_celeba_dataloader
+    del data_loader_kwargs["num_workers"]
+    train_loader = get_celeba_dataloader(args.data_dir, "train",
+                                         collate_fn=itemgetter(0),
+                                         batch_transform=rescaling,
+                                         **data_loader_kwargs)
+    test_loader_by_obs = {
+        obs: get_celeba_dataloader(args.data_dir, "validation",
+                                   collate_fn=get_resize_collate_fn(obs, itemgetter(0)),
+                                   batch_transform=rescaling,
+                                   **data_loader_kwargs)
+        for obs in resized_obses
+    }
 else :
     raise Exception('{} dataset not in {mnist, cifar10}'.format(args.dataset))
+
+
+# Select loss functions
+if 'mnist' in args.dataset :
+    # Losses for 1-channel images
+    loss_op = discretized_mix_logistic_loss_1d
+    loss_op_averaged = discretized_mix_logistic_loss_1d_averaged
+    sample_op = lambda x : sample_from_discretized_mix_logistic_1d(x, args.nr_logistic_mix)
+else:
+    # Losses for 3-channel images
+    loss_op = discretized_mix_logistic_loss
+    loss_op_averaged = discretized_mix_logistic_loss_averaged
+    sample_op = lambda x : sample_from_discretized_mix_logistic(x, args.nr_logistic_mix)
 
 
 # Construct model

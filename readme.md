@@ -28,3 +28,11 @@ python main.py
 ### Contact
 For questions / comments / requests, feel free to send me an email.\
 Happy generative modelling :)
+
+### Get CelebAHQ data
+```
+cd data
+wget https://storage.googleapis.com/glow-demo/data/celeba-tfr.tar
+tar -xvzf celeba-tfr.tar
+```
+Tensorflow needs to be installed to load the dataset, but the CPU version should be installed, ie `pip install tensorflow` to prevent TF from using GPU memory.

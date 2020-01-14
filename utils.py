@@ -52,7 +52,17 @@ def log_prob_from_logits(x):
     return x - m - torch.log(torch.sum(torch.exp(x - m), dim=axis, keepdim=True))
 
 
-def discretized_mix_logistic_loss(x, l):
+def average_loss(log_probs_fn, x, ls):
+    """ ensemble multiple nn outputs (ls) by averaging likelihood """
+    all_log_probs = []
+    for l in ls:
+        log_probs = log_probs_fn(x, l)  # B x H x W x num_logistic_mix
+        all_log_probs.append(log_probs)
+    all_log_probs = torch.cat(all_log_probs, dim=3) - np.log(len(ls))
+    return -torch.sum(log_sum_exp(all_log_probs))
+
+
+def discretized_mix_logistic_log_probs(x, l):
     """ log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval """
     # Pytorch ordering
     x = x.permute(0, 2, 3, 1)
@@ -117,7 +127,35 @@ def discretized_mix_logistic_loss(x, l):
     log_probs        = cond * log_cdf_plus + (1. - cond) * inner_out
     log_probs        = torch.sum(log_probs, dim=3) + log_prob_from_logits(logit_probs)
 
+    return log_probs
+
+
+def discretized_mix_logistic_loss(x, l):
+    """ reduced (summed) log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval
+    
+    Args:
+        x: B x C x H x W ground truth image
+        l: B x (10 * num_logistic_mix) x H x W output of NN
+
+    Returns:
+        loss: 0-dimensional NLL loss tensor
+    """
+    log_probs = discretized_mix_logistic_log_probs(x, l)  # B x H x W x num_logistic_mix
     return -torch.sum(log_sum_exp(log_probs))
+ 
+
+def discretized_mix_logistic_loss_averaged(x, ls):
+    """ reduced (summed) log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval
+    Averages likelihood across multiple sets of mixture parameters
+    
+    Args:
+        x: B x C x H x W ground truth image
+        ls: list of B x (10 * num_logistic_mix) x H x W outputs of NN
+
+    Returns:
+        loss: 0-dimensional NLL loss tensor
+    """
+    return average_loss(discretized_mix_logistic_log_probs, x, ls)
 
 
 def discretized_mix_logistic_log_probs_1d(x, l):
@@ -172,7 +210,7 @@ def discretized_mix_logistic_loss_1d(x, l):
     
     Args:
         x: B x C x H x W ground truth image
-        l: B x C x H x W x (3 * num_logistic_mix) output of NN
+        l: B x (3 * num_logistic_mix) x H x W output of NN
     """
     log_probs = discretized_mix_logistic_log_probs_1d(x, l)
     return -torch.sum(log_sum_exp(log_probs))
@@ -184,14 +222,9 @@ def discretized_mix_logistic_loss_1d_averaged(x, ls):
     
     Args:
         x: B x C x H x W ground truth image
-        ls: list of B x C x H x W x (3 * num_logistic_mix) outputs of NN
+        ls: list of B x (3 * num_logistic_mix) x H x W outputs of NN
     """
-    all_log_probs = []
-    for l in ls:
-        log_probs = discretized_mix_logistic_log_probs_1d(x, l)  # B x H x W x num_logistic_mix
-        all_log_probs.append(log_probs)
-    all_log_probs = torch.cat(all_log_probs, dim=3) - np.log(len(ls))
-    return -torch.sum(log_sum_exp(all_log_probs))
+    return average_loss(discretized_mix_logistic_log_probs_1d, x, ls)
 
 
 def to_one_hot(tensor, n, fill_with=1.):
