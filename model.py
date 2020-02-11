@@ -28,10 +28,11 @@ class PixelCNNLayer_up(nn.Module):
         u_list, ul_list = [], []
         
         for i in range(self.nr_resnet):
-            u  = self.u_stream[i](u)  # Don't need to rematerialize u stream
             if self.rematerialize:
+                u  = checkpoint(self.u_stream[i], u)
                 ul = checkpoint(self.ul_stream[i], ul, u)
             else:
+                u  = self.u_stream[i](u)
                 ul = self.ul_stream[i](ul, a=u)
             u_list  += [u]
             ul_list += [ul]
