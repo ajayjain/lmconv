@@ -227,6 +227,7 @@ class _input_masked_conv2d(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, mask, weight, bias=None, dilation=1, padding=1):
         assert len(x.shape) == 4, "Unfold/fold only support 4D batched image-like tensors"
+        ctx.save_for_backward(x, mask, weight)
         ctx.dilation = dilation
         ctx.padding = padding
         ctx.H, ctx.W = x.size(2), x.size(3)
@@ -248,8 +249,6 @@ class _input_masked_conv2d(torch.autograd.Function):
                                         x.size(2))
         x = torch.mul(x_unf_channels_batched, mask).view(x.shape)
 
-        ctx.save_for_backward(x, mask, weight)
-
         # Step 3: Perform convolution via matrix multiplication and addition
         weight_matrix = weight.view(out_channels, -1)
         x = weight_matrix.matmul(x)
@@ -259,10 +258,10 @@ class _input_masked_conv2d(torch.autograd.Function):
         # Step 4: Restore shape
         output = x.view(x.size(0), x.size(1), *ctx.output_shape)
         return output
-    
+
     @staticmethod
     def backward(ctx, grad_output):
-        x_masked_, mask, weight = ctx.saved_tensors
+        x, mask, weight = ctx.saved_tensors
         out_channels, in_channels, k1, k2 = weight.shape
         grad_output_unfolded = grad_output.view(grad_output.size(0),
                                                 grad_output.size(1),
@@ -283,16 +282,16 @@ class _input_masked_conv2d(torch.autograd.Function):
             grad_x = F.fold(grad_x_, (ctx.H, ctx.W), (k1, k2), dilation=ctx.dilation, padding=ctx.padding)
         if ctx.needs_input_grad[2]:
             # NOTE: Can recompute unfold and masking to avoid storing unfolded x, but has extra compute
-            # x_ = F.unfold(x, (k1, k2), dilation=ctx.dilation, padding=ctx.padding)  # B x 27 x 64
-            # x_unf_shape = x_.shape
-            # assert x_.size(1) % in_channels == 0
-            # x_ = x_.view(x_.size(0) * in_channels,
-            #              x_.size(1) // in_channels,
-            #              x_.size(2))
-            # x_ = torch.mul(x_, mask).view(x_unf_shape)
+            x_ = F.unfold(x, (k1, k2), dilation=ctx.dilation, padding=ctx.padding)  # B x 27 x 64
+            x_unf_shape = x_.shape
+            assert x_.size(1) % in_channels == 0
+            x_ = x_.view(x_.size(0) * in_channels,
+                         x_.size(1) // in_channels,
+                         x_.size(2))
+            x_ = torch.mul(x_, mask).view(x_unf_shape)
 
-            grad_weight = grad_output_unfolded.matmul(x_masked_.transpose(2, 1))
-            grad_weight = grad_weight.view(weight.shape)
+            grad_weight = grad_output_unfolded.matmul(x_.transpose(2, 1))
+            grad_weight = grad_weight.view(grad_weight.size(0), *weight.shape)
         if ctx.needs_input_grad[3]:
             grad_bias = grad_output.sum(dim=(0, 2, 3))
 
@@ -312,7 +311,7 @@ class input_masked_conv2d(nn.Module):
         pad0 = (dilation * (kernel_size[0] - 1)) // 2
         pad1 = (dilation * (kernel_size[1] - 1)) // 2
         self.padding = (pad0, pad1)
-        
+
         # Conv parameters
         self.weight = Parameter(torch.Tensor(out_channels, in_channels, *kernel_size))
         self.bias = Parameter(torch.Tensor(out_channels)) if bias else None
@@ -328,8 +327,8 @@ class input_masked_conv2d(nn.Module):
             nn.init.uniform_(self.bias, -bound, bound)
 
     def forward(self, x, mask=None):
-        return _input_masked_conv2d(x, mask, self.weight, self.bias,
-                                    self.dilation, self.padding)
+        return _input_masked_conv2d.apply(x, mask, self.weight, self.bias,
+                                          self.dilation, self.padding)
 
 
 class OrderRescale(nn.Module):
