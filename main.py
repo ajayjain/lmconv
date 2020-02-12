@@ -488,7 +488,7 @@ if args.mode == "train":
                     remove_path = os.path.join(run_dir, f"{args.exp_id}_ep{last_saved_epoch}.pth")
                     if os.path.exists(os.path.join(run_dir, f"{args.exp_id}_ep{last_saved_epoch}.pth")):
                         logger.info('deleting checkpoint at %s', remove_path)
-                        os.remove(torch.save(save_dict, remove_path))
+                        os.remove(remove_path)
                     last_saved_epoch = epoch
             except Exception as e:
                 logger.error("Failed to save checkpoint! Error: %s", e)
