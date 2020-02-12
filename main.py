@@ -42,6 +42,9 @@ parser.add_argument('-rd', '--run_dir', type=str, default=None,
 parser.add_argument('--exp_name', type=str, default=None)
 parser.add_argument('-ID', '--exp_id', type=int, default=0)
 parser.add_argument('--ours', action='store_true')
+# only for CelebAHQ
+parser.add_argument('--max_celeba_train_batches', type=int, default=-1)
+parser.add_argument('--max_celeba_test_batches', type=int, default=-1)
 # pixelcnn++ and our model
 parser.add_argument('-q', '--nr_resnet', type=int, default=5,
                     help='Number of residual blocks per stage of the model')
@@ -214,11 +217,13 @@ elif 'celebahq' in args.dataset :
         train_loader = get_celeba_dataloader(args.data_dir, "train",
                                             collate_fn=itemgetter(0),
                                             batch_transform=rescaling,
+                                            max_batches=args.max_celeba_train_batches,
                                             **kwargs)
         test_loader_by_obs = {
             obs: get_celeba_dataloader(args.data_dir, "validation",
                                     collate_fn=get_resize_collate_fn(obs, itemgetter(0)),
                                     batch_transform=rescaling,
+                                    max_batches=args.max_celeba_test_batches,
                                     **kwargs)
             for obs in resized_obses
         }
@@ -227,8 +232,8 @@ elif 'celebahq' in args.dataset :
     train_loader, test_loader_by_obs = get_celeba_dataloaders()
 
     # Manually specify upper bounds for progress bars
-    train_total = 27000
-    test_total = 3000
+    train_total = 27000 // args.batch_size if args.max_celeba_train_batches <= 0 else args.max_celeba_train_batches
+    test_total = 3000 // args.batch_size if args.max_celeba_test_batches <= 0 else args.max_celeba_test_batches
 else :
     raise Exception('{} dataset not in {mnist, cifar10}'.format(args.dataset))
 

@@ -2,6 +2,7 @@
 
 from glob import glob
 
+import itertools
 import numpy as np
 import tensorflow as tf
 import torch
@@ -32,7 +33,8 @@ class TFRecordIterableDataset(torch.utils.data.IterableDataset):
                  resolution=256,
                  is_training=True,
                  tf_num_parallel_map=16,
-                 batch_transform=None):
+                 batch_transform=None,
+                 max_batches=-1):
         super(TFRecordIterableDataset).__init__()
         
         files = tf.data.Dataset.list_files(tfr_file_pattern)
@@ -55,15 +57,23 @@ class TFRecordIterableDataset(torch.utils.data.IterableDataset):
             # Convert to torch and add label
             self.batch_transform = lambda tf_tensor: (tf_to_torch(tf_tensor), None)
 
-    def __iter__(self):           
-        return map(self.batch_transform,
-                   self.batched_tf_tensor_iterator)
+        self.max_batches = max_batches
+
+    def __iter__(self):
+        iterator = map(self.batch_transform, self.batched_tf_tensor_iterator)
+
+        if self.max_batches > 0:
+            # Limit number of batches this dataset can return
+            return itertools.islice(iterator, self.max_batches)
+
+        return iterator
 
 
 def get_celeba_dataloader(data_dir="data",
                           split="train",
                           tf_num_parallel_map=16,
                           batch_transform=None,
+                          max_batches=-1,
                           **data_loader_kwargs):
     # r08 specifies resolution: log_2(256) = 8
     tfr_file = f'{data_dir}/celeba-tfr/{split}/{split}-r08-s-*-of-*.tfrecords'
@@ -75,6 +85,7 @@ def get_celeba_dataloader(data_dir="data",
                                       resolution=256,
                                       is_training=(split == "train"),
                                       tf_num_parallel_map=tf_num_parallel_map,
-                                      batch_transform=batch_transform)
+                                      batch_transform=batch_transform,
+                                      max_batches=max_batches)
     assert data_loader_kwargs.get("num_workers", 0) == 0
     return torch.utils.data.DataLoader(dataset, **data_loader_kwargs)
