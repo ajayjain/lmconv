@@ -113,7 +113,7 @@ else:
         os.makedirs(run_dir, exist_ok=False)
 assert os.path.exists(run_dir), "Did not find run directory, check --run_dir argument"
 
-wandb.init(project="autoreg_orders", id=args.exp_id, name=run_dir, job_type=args.mode)
+wandb.init(project="autoreg_orders", id=str(args.exp_id), name=run_dir, job_type=args.mode)
 
 # Log arguments
 wandb.config.update(args)
