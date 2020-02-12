@@ -223,12 +223,89 @@ class masked_conv2d(nn.Module):
         return F.conv2d(x, masked_weight, self.bias, padding=self.padding, dilation=self.dilation)
 
 
+class _input_masked_conv2d(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, mask, weight, bias=None, dilation=1, padding=1):
+        assert len(x.shape) == 4, "Unfold/fold only support 4D batched image-like tensors"
+        ctx.dilation = dilation
+        ctx.padding = padding
+        ctx.H, ctx.W = x.size(2), x.size(3)
+
+        # Shapes
+        ctx.output_shape = (x.shape[2], x.shape[3])
+        out_channels, in_channels, k1, k2 = weight.shape
+        assert x.size(1) == in_channels
+        assert mask.size(1) == k1 * k2
+
+        # Step 1: Unfold (im2col)
+        x = F.unfold(x, (k1, k2), dilation=dilation, padding=padding)
+
+        # Step 2: Mask x. Avoid repeating mask in_channels
+        #         times by reshaping x_unf (memory efficient)
+        assert x.size(1) % in_channels == 0
+        x_unf_channels_batched = x.view(x.size(0) * in_channels,
+                                        x.size(1) // in_channels,
+                                        x.size(2))
+        x = torch.mul(x_unf_channels_batched, mask).view(x.shape)
+
+        ctx.save_for_backward(x, mask, weight)
+
+        # Step 3: Perform convolution via matrix multiplication and addition
+        weight_matrix = weight.view(out_channels, -1)
+        x = weight_matrix.matmul(x)
+        if bias is not None:
+            x = x + bias.unsqueeze(0).unsqueeze(2)
+
+        # Step 4: Restore shape
+        output = x.view(x.size(0), x.size(1), *ctx.output_shape)
+        return output
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        x_masked_, mask, weight = ctx.saved_tensors
+        out_channels, in_channels, k1, k2 = weight.shape
+        grad_output_unfolded = grad_output.view(grad_output.size(0),
+                                                grad_output.size(1),
+                                                -1)  # B x C_out x (H*W)
+
+        # Compute gradients
+        grad_x = grad_weight = grad_bias = None
+        if ctx.needs_input_grad[0]:
+            weight_ = weight.view(out_channels, -1)
+            grad_x_ = weight_.transpose(0, 1).matmul(grad_output_unfolded)
+            grad_x_shape = grad_x_.shape
+            # View to allow masking, since mask needs to be broadcast C_in times
+            assert grad_x_.size(1) % in_channels == 0
+            grad_x_ = grad_x_.view(grad_x_.size(0) * in_channels,
+                                   grad_x_.size(1) // in_channels,
+                                   grad_x_.size(2))
+            grad_x_ = torch.mul(grad_x_, mask).view(grad_x_shape)
+            grad_x = F.fold(grad_x_, (ctx.H, ctx.W), (k1, k2), dilation=ctx.dilation, padding=ctx.padding)
+        if ctx.needs_input_grad[2]:
+            # NOTE: Can recompute unfold and masking to avoid storing unfolded x, but has extra compute
+            # x_ = F.unfold(x, (k1, k2), dilation=ctx.dilation, padding=ctx.padding)  # B x 27 x 64
+            # x_unf_shape = x_.shape
+            # assert x_.size(1) % in_channels == 0
+            # x_ = x_.view(x_.size(0) * in_channels,
+            #              x_.size(1) // in_channels,
+            #              x_.size(2))
+            # x_ = torch.mul(x_, mask).view(x_unf_shape)
+
+            grad_weight = grad_output_unfolded.matmul(x_masked_.transpose(2, 1))
+            grad_weight = grad_weight.view(weight.shape)
+        if ctx.needs_input_grad[3]:
+            grad_bias = grad_output.sum(dim=(0, 2, 3))
+
+        assert not ctx.needs_input_grad[1], "Can't differentiate wrt mask"
+
+        return grad_x, None, grad_weight, grad_bias, None, None
+
+
 class input_masked_conv2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=(3,3), dilation=1, bias=True):
         super(input_masked_conv2d, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = kernel_size
         self.dilation = dilation
 
         # Pad to maintain spatial dimensions
@@ -251,34 +328,8 @@ class input_masked_conv2d(nn.Module):
             nn.init.uniform_(self.bias, -bound, bound)
 
     def forward(self, x, mask=None):
-        assert len(x.shape) == 4, "Unfold/fold only support 4D batched image-like tensors"
-        output_shape = (x.shape[2], x.shape[3])
-        C = x.shape[1]
-
-        x = F.unfold(x, self.kernel_size, dilation=self.dilation, padding=self.padding)
-
-        if mask is not None:
-            # Option 1: Repeat mask from 1x(k*k)xnum_patches to 1x(C*k*k)xnum_patches
-            # mask_repeat = mask.repeat(1, x.size(1), 1)
-            # x_unf = x_unf * mask_repeat
-
-            # Option 3: Avoid repeating mask in_channels times by reshaping x_unf (memory efficient)
-            assert x.size(1) % C == 0
-            x_unf_channels_batched = x.view(x.size(0) * C, x.size(1) // C, x.size(2))
-            x = torch.mul(x_unf_channels_batched, mask).view(x.shape)
-        else:
-            logger.warning("input_masked_conv2d not provided mask, not masking!")
-
-        # Perform convolution via matrix multiplication and addition
-        weight_matrix = self.weight.view(self.out_channels, -1)
-        x = torch.einsum('ij,bjk->bik', weight_matrix, x)
-        # x = weight_matrix.matmul(x)
-
-        if self.bias is not None:
-            x = x + self.bias.unsqueeze(0).unsqueeze(2)
-
-        # Output shape is preserved due to input padding
-        return F.fold(x, output_shape, (1, 1))
+        return _input_masked_conv2d(x, mask, self.weight, self.bias,
+                                    self.dilation, self.padding)
 
 
 class OrderRescale(nn.Module):
