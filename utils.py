@@ -337,6 +337,7 @@ def load_part_of_model(path, model, optimizer=None):
     checkpoint = torch.load(path)
     params = checkpoint["model_state_dict"]
     # Restore model
+    logger.info("Restoring model from %s", path)
     added = 0
     for name, param in params.items():
         if name in model.state_dict().keys():
@@ -350,6 +351,16 @@ def load_part_of_model(path, model, optimizer=None):
 
     # Restore optimizer
     if optimizer:
-        logger.error("Not restoring optimizer, not implemented yet")
+        logger.info("Restoring optimizer from %s", path)
+        added = 0
+        for name, param in checkpoint["optimizer_state_dict"].items():
+            if name in optimizer.state_dict().keys():
+                try:
+                    optimizer.state_dict()[name].copy_(param)
+                    added += 1
+                except Exception as e:
+                    logger.error("Error loading optimizer.state_dict()[%s]: %s", name, e)
+                    pass
+        logger.info('Loadded %s fraction of optimizer params:' % (added / float(len(optimizer.state_dict().keys()))))
 
     return checkpoint["epoch"]
