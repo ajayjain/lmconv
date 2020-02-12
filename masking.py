@@ -49,7 +49,8 @@ def hilbert_idx(rows, cols):
 
 def get_generation_order_idx(order: str, rows: int, cols: int):
     """Get (rows*cols) x 2 np array given order that pixels are generated"""
-    assert order in ["raster_scan", "s_curve", "hilbert", "gilbert2d"]
+    assert order in ["raster_scan", "s_curve", "hilbert", "gilbert2d",
+                     "s_curve_center_quarter_last"]
     return eval(f"{order}_idx")(rows, cols)
 
 def reflect_rows(generation_idx, obs):
@@ -118,6 +119,35 @@ def plot_orders(generation_idx_list, obs, size=5, plot_rows=4, out_path=None):
         plt.savefig(out_path)
     else:
         plt.show()
+
+
+########################################
+# Inpainting generation order helpers
+########################################
+
+def move_to_end(order, coords_to_move):
+    order = list(order)
+    rearranged = []
+    end = []
+    for coord in order:
+        x1, x2 = coord
+        if (x1, x2) in coords_to_move:
+            end.append(coord)
+        else:
+            rearranged.append(coord)
+    return np.array(rearranged + end)
+
+def _center_quarter_coords(rows, cols):
+    # Indices of center mask of half width and height
+    center_coords = []
+    for x1 in range(rows // 4, rows - rows // 4):
+        for x2 in range(cols // 4, cols - cols // 4):
+            center_coords.append((x1, x2))
+    return center_coords
+
+def s_curve_center_quarter_last_idx(rows, cols):
+    order = s_curve_idx(rows, cols)
+    return move_to_end(order, _center_quarter_coords(rows, cols))
 
 
 ########

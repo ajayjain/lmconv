@@ -76,11 +76,11 @@ parser.add_argument('-nm', '--normalization', type=str, default='weight_norm',
 parser.add_argument('-af', '--accum_freq', type=int, default=1,
                     help='Batches per optimization step. Used for gradient accumulation')
 parser.add_argument('--two_stream', action="store_true", help="Enable two stream model")
-parser.add_argument('--order', type=str, choices=["raster_scan", "s_curve", "hilbert", "gilbert2d"],
+parser.add_argument('--order', type=str, choices=["raster_scan", "s_curve", "hilbert", "gilbert2d", "s_curve_center_quarter_last"],
                     help="Autoregressive generation order")
 parser.add_argument('--randomize_order', action="store_true", help="Randomize between 8 variants of the "
                     "pixel generation order.")
-parser.add_argument('--mode', type=str, choices=["train", "sample", "test"],
+parser.add_argument('--mode', type=str, choices=["train", "sample", "test", "test_center_quarter"],
                     default="train")
 parser.add_argument('--no_bias', action="store_true", help="Disable learnable bias for all convolutions")
 parser.add_argument('--minimize_bpd', action="store_true", help="Minimize bpd, scaling loss down by number of dimension")
@@ -313,6 +313,12 @@ model = nn.DataParallel(model)
 model = model.cuda()
 
 
+# Create optimizer
+# NOTE: PixelCNN++ TF repo uses betas=(0.95, 0.9995), different than PyTorch defaults
+optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=args.lr_decay)
+
+
 # Load model parameters from checkpoint
 if args.load_params:
     # TODO: Restore optimizer
@@ -320,19 +326,14 @@ if args.load_params:
         load_params = args.load_params
     else:
         load_params = os.path.join(run_dir, args.load_params)
-    checkpoint_epochs = load_part_of_model(load_params, model=model.module, optimizer=None)
+    checkpoint_epochs = load_part_of_model(load_params, model=model.module, optimizer=optimizer)
     logger.info(f"Model parameters loaded from {load_params}, from after {checkpoint_epochs} training epochs")
 else:
     checkpoint_epochs = -1
 
 
-# Create optimizer
-# NOTE: PixelCNN++ TF repo uses betas=(0.95, 0.9995), different than PyTorch defaults
-optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=args.lr_decay)
-
-
-def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True):
+def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True,
+         slice_op=None, sliced_obs=obs):
     logger.info(f"Testing with ensemble of {len(all_masks)} orderings")
     test_loss = 0.
     for batch_idx, (input,_) in enumerate(tqdm.tqdm(test_loader,
@@ -350,8 +351,10 @@ def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True):
         outputs = []
         for mask_init, mask_undilated, mask_dilated in all_masks:
             output = model(input_var, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
+            output = slice_op(output) if slice_op is not None else output
             outputs.append(output)
-        loss = loss_op_averaged(input_var, outputs)
+        input_var_for_loss = slice_op(input_var) if slice_op is not None else input_var
+        loss = loss_op_averaged(input_var_for_loss, outputs)
 
         test_loss += loss.item()
         del loss, output
@@ -359,7 +362,7 @@ def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True):
     # FIXME: for final evaluation, don't use batch_idx * args.batch_size -- this slightly overestimates
     # the number of dims (10016 * prod(obs) * log(2) for mnist) since the last iteration might have fewer than
     # args.batch_size images. Leaving this code the same for now to allow comparison between training runs.
-    deno = batch_idx * args.batch_size * np.prod(obs) * np.log(2.)
+    deno = batch_idx * args.batch_size * np.prod(sliced_obs) * np.log(2.)
     assert deno > 0, embed()
     test_bpd = test_loss / deno
     return test_bpd
@@ -383,6 +386,7 @@ if args.mode == "train":
     global_step = 0
     min_train_bpd = 1e12
     min_test_bpd_by_obs = {obs: 1e12 for obs in resized_obses}
+    last_saved_epoch = -1
     for epoch in range(checkpoint_epochs + 1, args.max_epochs):
         train_loss = 0.
         time_ = time.time()
@@ -470,16 +474,24 @@ if args.mode == "train":
                     writer.add_scalar(f'test/bpd', test_bpd, global_step)
                     writer.add_scalar(f'test/min_bpd', min_test_bpd_by_obs[obs], global_step)
 
-            if (epoch + 1) % args.save_interval == 0: 
-                logger.info('saving model...')
-                save_dict["epoch"] = epoch
-                save_dict["args"] = vars(args)
-                try:
-                    save_dict["model_state_dict"] = model.module.state_dict()
-                    save_dict["optimizer_state_dict"] = optimizer.state_dict()
-                    torch.save(save_dict, os.path.join(run_dir, f"{args.exp_id}_ep{epoch}.pth"))
-                except Exception as e:
-                    logger.error("Failed to save checkpoint! Error: %s", e)
+            # Save checkpoint so we have checkpoints every save_interval epochs, as well as a rolling most recent checkpoint
+            save_path = os.path.join(run_dir, f"{args.exp_id}_ep{epoch}.pth")
+            logger.info('saving model to %s...', save_path)
+            save_dict["epoch"] = epoch
+            save_dict["args"] = vars(args)
+            try:
+                save_dict["model_state_dict"] = model.module.state_dict()
+                save_dict["optimizer_state_dict"] = optimizer.state_dict()
+                torch.save(save_dict, save_path)
+                if (epoch + 1) % args.save_interval != 0: 
+                    # Remove last off-cycle checkpoint
+                    remove_path = os.path.join(run_dir, f"{args.exp_id}_ep{last_saved_epoch}.pth")
+                    if os.path.exists(os.path.join(run_dir, f"{args.exp_id}_ep{last_saved_epoch}.pth")):
+                        logger.info('deleting checkpoint at %s', remove_path)
+                        os.remove(torch.save(save_dict, remove_path))
+                    last_saved_epoch = epoch
+            except Exception as e:
+                logger.error("Failed to save checkpoint! Error: %s", e)
 
             if (epoch + 1) % args.sample_interval == 0: 
                 for obs in resized_obses:
@@ -510,7 +522,32 @@ elif args.mode == "sample":
             sample_t = rescaling_inv(sample_t)
             utils.save_image(sample_t, os.path.join(run_dir, f'sample_obs{obs2str(obs)}_{checkpoint_epochs}_order{sample_order_i}.png'),
                              nrow=5, padding=0)
-elif args.mode == "test":
+elif args.mode.startswith("test"):
+    if args.mode == "test_center_quarter":
+        def take_incomplete_regions(x):
+            """Take a subset of pixels from x
+            
+            Args:
+                x: B x C x H x W image / tensor
+
+            Returns:
+                y: B x C x H' x W' image / tensor
+            """
+            H, W = x.shape[2], x.shape[3]
+            minh = H // 4
+            maxh = H - (H // 4)
+            minw = W // 4
+            maxw = W - (W // 4)
+            y = x[:, :, minh:maxh, minw:maxw]
+            assert y.shape[2] == H // 2
+            assert y.shape[3] == W // 2
+            return y
+
+        sliced_obs = (obs[0], obs[1] // 2, obs[2] // 2)
+    else:
+        take_incomplete_regions = lambda x: x
+        sliced_obs = obs
+
     model.eval()
     with torch.no_grad():
         for obs in resized_obses:
@@ -519,5 +556,7 @@ elif args.mode == "test":
                             all_masks_by_obs[obs],
                             test_loader_by_obs[obs],
                             checkpoint_epochs,
-                            progress_bar=False)
-            logger.info(f"test loss for obs {obs2str(obs)}: %s bpd" % test_bpd)
+                            progress_bar=False,
+                            slice_op=take_incomplete_regions,
+                            sliced_obs=sliced_obs)
+            logger.info(f"test loss for obs {obs2str(obs)}, sliced obs {obs2str(sliced_obs)}: %s bpd" % test_bpd)
