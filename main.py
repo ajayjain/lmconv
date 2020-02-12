@@ -13,6 +13,7 @@ import torch.optim as optim
 from torch.optim import lr_scheduler
 from torchvision import datasets, transforms, utils
 import tqdm
+import wandb
 
 from masking import *
 from model import *
@@ -97,7 +98,6 @@ args = parser.parse_args()
 torch.manual_seed(args.seed)
 np.random.seed(args.seed)
 
-
 # Create run directory
 if args.run_dir:
     run_dir = args.run_dir
@@ -113,8 +113,10 @@ else:
         os.makedirs(run_dir, exist_ok=False)
 assert os.path.exists(run_dir), "Did not find run directory, check --run_dir argument"
 
+wandb.init(project="autoreg_orders", id=args.exp_id, name=run_dir, job_type=args.mode)
 
 # Log arguments
+wandb.config.update(args)
 logger = configure_logger(os.path.join(run_dir, f"{args.mode}.log"))
 logger.info("Run directory: %s", run_dir)
 logger.info("Arguments: %s", args)
@@ -285,8 +287,10 @@ if args.ours:
         else:
             all_generation_idx = [base_generation_idx]
         if args.mode == "train":
+            plot_orders_out_path = os.path.join(run_dir, f"orderings_obs{obs2str(obs)}.png")
             plot_orders(all_generation_idx, obs, size=5, plot_rows=min(len(all_generation_idx), 4),
-                        out_path=os.path.join(run_dir, f"orderings_obs{obs2str(obs)}.png"))
+                        out_path=plot_orders_out_path)
+            wandb.log({f"orderings_obs{obs2str(obs)}": wandb.Image(plot_orders_out_path)})
         all_generation_idx_by_obs[obs] = all_generation_idx
 
         # Make masks and plot
@@ -311,6 +315,7 @@ else:
         all_masks_by_obs[obs] = [(None, None, None)]
 model = nn.DataParallel(model)
 model = model.cuda()
+wandb.watch(model)
 
 
 # Create optimizer
@@ -425,12 +430,16 @@ if args.mode == "train":
                         gradient_norm += param_norm.item() ** 2
                     gradient_norm = gradient_norm ** (1. / 2)
                 writer.add_scalar('train/gradient_norm', gradient_norm, global_step)
+                wandb.log({"train/gradient_norm": gradient_norm, "epoch": epoch}, step=global_step)
                 optimizer.step()
             train_loss += loss.item()
 
             writer.add_scalar('train/bpd', train_bpd.item(), global_step)
             min_train_bpd = min(min_train_bpd, train_bpd.item())
             writer.add_scalar('train/min_bpd', min_train_bpd, global_step)
+            wandb.log({"train/bpd": train_bpd.item(),
+                       "train/min_bpd": min_train_bpd,
+                       "epoch": epoch}, step=global_step)
 
             if batch_idx >= 100 and train_bpd.item() >= 10:
                 logger.warning("WARNING: main.py: large batch loss {} bpd".format(train_bpd.item()))
@@ -464,15 +473,19 @@ if args.mode == "train":
                                 epoch,
                                 progress_bar=True)
                 writer.add_scalar(f'test/bpd_{obs2str(obs)}', test_bpd, global_step)
+                wandb.log({f'test/bpd_{obs2str(obs)}': test_bpd, "epoch": epoch}, step=global_step)
                 logger.info(f"test loss for obs {obs2str(obs)}: %s bpd" % test_bpd)
                 save_dict[f"test_loss_{obs2str(obs)}"] = test_bpd
 
                 # Log min test bpd for smoothness
                 min_test_bpd_by_obs[obs] = min(min_test_bpd_by_obs[obs], test_bpd)
                 writer.add_scalar(f'test/min_bpd_{obs2str(obs)}', min_test_bpd_by_obs[obs], global_step)
+                wandb.log({f'test/min_bpd_{obs2str(obs)}': min_test_bpd_by_obs[obs], "epoch": epoch}, step=global_step)
                 if obs == dataset_obs:
                     writer.add_scalar(f'test/bpd', test_bpd, global_step)
                     writer.add_scalar(f'test/min_bpd', min_test_bpd_by_obs[obs], global_step)
+                    wandb.log({'test/bpd': test_bpd, 'epoch': epoch}, step=global_step)
+                    wandb.log({'test/min_bpd': min_test_bpd_by_obs[obs], 'epoch': epoch}, step=global_step)
 
             # Save checkpoint so we have checkpoints every save_interval epochs, as well as a rolling most recent checkpoint
             save_path = os.path.join(run_dir, f"{args.exp_id}_ep{epoch}.pth")
@@ -502,8 +515,9 @@ if args.mode == "train":
                         logger.info('sampling images with observation %s, ordering variant %d...', obs2str(obs), sample_order_i)
                         sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i])
                         sample_t = rescaling_inv(sample_t)
-                        utils.save_image(sample_t, os.path.join(run_dir, f"tsample_obs{obs2str(obs)}_{epoch}_order{sample_order_i}.png"), 
-                                         nrow=5, padding=0)
+                        sample_save_path = os.path.join(run_dir, f"tsample_obs{obs2str(obs)}_{epoch}_order{sample_order_i}.png")
+                        utils.save_image(sample_t, sample_save_path, nrow=5, padding=0)
+                        wandb.log({"samples": wandb.Image(sample_save_path), "epoch": epoch}, step=global_step)
                     except Exception as e:
                         logger.error("Failed to sample images! Error: %s", e)
         
