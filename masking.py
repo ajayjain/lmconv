@@ -137,7 +137,7 @@ def move_to_end(order, coords_to_move):
             rearranged.append(coord)
     return np.array(rearranged + end)
 
-def _center_quarter_coords(rows, cols):
+def center_quarter_coords(rows, cols):
     # Indices of center mask of half width and height
     center_coords = []
     for x1 in range(rows // 4, rows - rows // 4):
@@ -147,7 +147,7 @@ def _center_quarter_coords(rows, cols):
 
 def s_curve_center_quarter_last_idx(rows, cols):
     order = s_curve_idx(rows, cols)
-    return move_to_end(order, _center_quarter_coords(rows, cols))
+    return move_to_end(order, center_quarter_coords(rows, cols))
 
 
 ########
@@ -155,16 +155,40 @@ def s_curve_center_quarter_last_idx(rows, cols):
 ########
 
 def kernel_masks(generation_order_idx: np.ndarray, nrows, ncols, k=3,
-                 dilation=1, mask_type='B', set_padding=0) -> np.ndarray:
-    """Generate kernel masks given a pixel generation order."""
+                 dilation=1, mask_type='B', set_padding=0, observed_idx: np.ndarray=None) -> np.ndarray:
+    """Generate kernel masks given a pixel generation order.
+    
+    Args:
+        generation_order_idx: N x 2 array, order to generate pixels. 
+        nrows
+        ncols
+        k
+        dilation
+        mask_type: A or B
+        set_padding
+        observed_idx: M x 2 array, for coords in this list, will allow all locations to condition.
+            Useful for inpainting tasks, where some context is observed and masking is only needed
+            in the unobserved region.
+    """
     assert k % 2 == 1, "Only odd sized kernels are implemented"
     half_k = int(k / 2)
     masks = np.zeros((len(generation_order_idx), k, k))
+
     locs_generated = set()
+    if observed_idx is not None:
+        # Can observe some context
+        for r, c in observed_idx:
+            locs_generated.add((r, c))
+
+    # Set masks
     for i, (r, c) in enumerate(generation_order_idx):
         row_major_index = r * ncols + c
         for dr in range(-half_k, half_k+1):
             for dc in range(-half_k, half_k+1):
+                if dr == 0 or dc == 0:
+                    # skip center pixel of mask
+                    continue
+
                 loc = (r + dr * dilation, c + dc * dilation)
                 if loc in locs_generated:
                     # The desired location has been generated,
@@ -182,18 +206,19 @@ def kernel_masks(generation_order_idx: np.ndarray, nrows, ncols, k=3,
 
     return masks
 
-def get_unfolded_masks(generation_order_idx, nrows, ncols, k=3, dilation=1, mask_type='B'):
+def get_unfolded_masks(generation_order_idx, nrows, ncols, k=3, dilation=1, mask_type='B', observed_idx=None):
     assert mask_type in ['A', 'B']
-    masks = kernel_masks(generation_order_idx, nrows, ncols, k, dilation, mask_type, set_padding=0)
+    masks = kernel_masks(generation_order_idx, nrows, ncols, k, dilation, mask_type,
+                         set_padding=0, observed_idx=observed_idx=)
     masks = torch.tensor(masks, dtype=torch.float)
     masks_unf = masks.view(1, nrows * ncols, -1).transpose(1, 2)
     return masks_unf
 
-def get_masks(generation_idx, nrows: int, ncols: int, k: int=3, max_dilation: int=1, out_dir: str="/tmp", plot_suffix="", plot=True):
+def get_masks(generation_idx, nrows: int, ncols: int, k: int=3, max_dilation: int=1, observed_idx=None, out_dir: str="/tmp", plot_suffix="", plot=True):
     """Get and plot three masks: mask type A for first layer, mask type B for later layers, and mask type B with dilation.
     Masks are copied to GPU and repeated along the batch dimension torch.cuda.device_count() times for DataParallel support."""
-    mask_init = get_unfolded_masks(generation_idx, nrows, ncols, k=k, dilation=1, mask_type='A')
-    mask_undilated = get_unfolded_masks(generation_idx, nrows, ncols, k=k, dilation=1, mask_type='B')
+    mask_init = get_unfolded_masks(generation_idx, nrows, ncols, k=k, dilation=1, mask_type='A', observed_idx=observed_idx)
+    mask_undilated = get_unfolded_masks(generation_idx, nrows, ncols, k=k, dilation=1, mask_type='B', observed_idx=observed_idx)
     if plot:
         plot_unfolded_masks(nrows, ncols, generation_idx, mask_init, k=k, out_path=os.path.join(out_dir, f"mask_init_{plot_suffix}.pdf"))
         plot_unfolded_masks(nrows, ncols, generation_idx, mask_undilated, k=k, out_path=os.path.join(out_dir, f"mask_undilated_{plot_suffix}.pdf"))
@@ -203,7 +228,7 @@ def get_masks(generation_idx, nrows: int, ncols: int, k: int=3, max_dilation: in
     if max_dilation == 1:
         mask_dilated = mask_undilated
     else:
-        mask_dilated = get_unfolded_masks(generation_idx, nrows, ncols, k=k, dilation=max_dilation, mask_type='B')
+        mask_dilated = get_unfolded_masks(generation_idx, nrows, ncols, k=k, dilation=max_dilation, mask_type='B', observed_idx=observed_idx)
         if plot:
             plot_unfolded_masks(nrows, ncols, generation_idx, mask_dilated, k=k, out_path=os.path.join(out_dir, f"mask_dilated_d{max_dilation}_{plot_suffix}.pdf"))
         mask_dilated = mask_dilated.cuda(non_blocking=True).repeat(torch.cuda.device_count(), 1, 1)
