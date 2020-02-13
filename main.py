@@ -401,6 +401,25 @@ def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True,
     return test_bpd
 
 
+def get_sampling_images(loader):
+    # Get batch of images to complete for inpainting, or None for --sample_region=full
+    if args.sample_region == "full":
+        return None
+
+    logger.info('getting batch of images to complete...')
+    # Get sample_batch_size images from test set
+    batches_to_complete = []
+    sample_iter = iter(loader)
+    for _ in range(sample_batch_size // args.batch_size + 1):
+        batches_to_complete.append(next(sample_iter))
+    del sample_iter
+
+    batch_to_complete = torch.stack(batches_to_complete, dim=0)[:sample_batch_size]
+    logger.info('got %d images to complete with shape %s', len(batch_to_complete), batch_to_complete.shape)
+
+    return batch_to_complete
+
+
 def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch_to_complete, obs):
     model.eval()
     if args.sample_region == "full":
@@ -579,18 +598,8 @@ if args.mode == "train":
                         all_masks = all_masks_by_obs[obs]
                         all_generation_idx = all_generation_idx_by_obs[obs]
                         sample_order_i = np.random.randint(len(all_masks))
-
-                        batch_to_complete = None
-                        if args.sample_region != "full":
-                            logger.info('getting batch of images to complete...')
-                            # Get sample_batch_size images from test set
-                            batches_to_complete = []
-                            sample_iter = iter(test_loader_by_obs[obs])
-                            for _ in range(sample_batch_size // args.batch_size + 1):
-                                batches_to_complete.append(next(sample_iter))
-                            batch_to_complete = torch.stack(batches_to_complete, dim=0)[:sample_batch_size]
-                            del sample_iter
-                            logger.info('got %d images to complete with shape %s', len(batch_to_complete), batch_to_complete.shape)
+ 
+                        batch_to_complete = get_sampling_images(test_loader_by_obs[obs])
 
                         logger.info('sampling images with observation %s, ordering variant %d...', obs2str(obs), sample_order_i)
                         sample_t = sample(model,
@@ -609,7 +618,9 @@ if args.mode == "train":
             # Need to manually re-create loaders to reset
             train_loader, test_loader_by_obs = get_celeba_dataloaders()
 elif args.mode == "sample":
-    # NOTE: Inpainting not supported, need to get batch of images to complete
+    assert dataset_obs in resized_obses
+    batch_to_complete = get_sampling_images(test_loader_by_obs[dataset_obs])
+
     model.eval()
     with torch.no_grad():
         for obs in resized_obses:
@@ -617,7 +628,7 @@ elif args.mode == "sample":
             all_generation_idx = all_generation_idx_by_obs[obs]
             sample_order_i = np.random.randint(len(all_masks))
             logger.info('sampling images with observation %s, ordering variant %d...', obs2str(obs), sample_order_i)
-            sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i], None, obs)
+            sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i], batch_to_complete, obs)
             sample_t = rescaling_inv(sample_t)
             utils.save_image(sample_t, os.path.join(run_dir, f'sample_obs{obs2str(obs)}_{checkpoint_epochs}_order{sample_order_i}.png'),
                              nrow=5, padding=0)
