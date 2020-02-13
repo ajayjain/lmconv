@@ -414,7 +414,7 @@ def get_sampling_images(loader):
         batches_to_complete.append(next(sample_iter)[0])  # ignore labels
     del sample_iter
 
-    batch_to_complete = torch.stack(batches_to_complete, dim=0)[:sample_batch_size]
+    batch_to_complete = torch.cat(batches_to_complete, dim=0)[:sample_batch_size]
     logger.info('got %d images to complete with shape %s', len(batch_to_complete), batch_to_complete.shape)
 
     return batch_to_complete
@@ -467,7 +467,7 @@ def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch
 
     if batch_to_complete is not None:
         # Concatenate along batch dimension to visualize GT images
-        data = torch.stack([data, batch_to_complete], dim=0)
+        data = torch.cat([data, batch_to_complete], dim=0)
 
     return data
 
