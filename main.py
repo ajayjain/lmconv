@@ -85,10 +85,11 @@ parser.add_argument('--order', type=str, choices=["raster_scan", "s_curve", "hil
                     help="Autoregressive generation order")
 parser.add_argument('--randomize_order', action="store_true", help="Randomize between 8 variants of the "
                     "pixel generation order.")
-parser.add_argument('--mode', type=str, choices=["train", "sample", "test", "test_center_quarter"],
+parser.add_argument('--mode', type=str, choices=["train", "sample", "test", "test_center_quarter", "test_top_half"],
                     default="train")
-parser.add_argument('--sample_region', type=str, choices=["full", "center", "random_near_center"], default="full")
-parser.add_argument('--sample_size', type=int, default=16, help="Only used for --sample_region center or random. H/W of inpainting region.")
+parser.add_argument('--sample_region', type=str, choices=["full", "center", "random_near_center", "top"], default="full")
+parser.add_argument('--sample_size_h', type=int, default=16, help="Only used for --sample_region center or random. =H of inpainting region.")
+parser.add_argument('--sample_size_w', type=int, default=16, help="Only used for --sample_region center or random. =W of inpainting region.")
 parser.add_argument('--no_bias', action="store_true", help="Disable learnable bias for all convolutions")
 parser.add_argument('--minimize_bpd', action="store_true", help="Minimize bpd, scaling loss down by number of dimension")
 parser.add_argument('--resize_sizes', type=int, nargs="*")
@@ -312,6 +313,10 @@ if args.ours:
     for obs in resized_obses:
         # Get generation orders
         base_generation_idx = get_generation_order_idx(args.order, obs[1], obs[2])
+
+        # FIXME: HARDCODED REFLECTION OF ORDER TO DO TOP HALF INPAINTING
+        # base_generation_idx = reflect_rows(base_generation_idx, obs)
+
         if args.randomize_order:
             all_generation_idx = augment_orders(base_generation_idx, obs)
         else:
@@ -319,10 +324,17 @@ if args.ours:
 
         # Generate center square last for inpainting
         observed_idx = None
-        if args.mode == "test_center_quarter":
-            logger.info("Moving center coord generation to end for each variant of the order")
-            observed_idx = center_quarter_coords(rows, cols)
-            all_generation_idx = [move_to_end(idx, center_coords) for idx in all_generation_idx]
+        #if args.mode == "test_center_quarter":
+            #logger.info("Moving center coord generation to end for each variant of the order")
+            #center_idx = center_quarter_coords(obs[1], obs[2])
+            #all_generation_idx = [move_to_end(idx, center_idx) for idx in all_generation_idx]
+
+            ## Full context
+            #observed_idx = []
+            #for r in range(obs[1]):
+            #    for c in range(obs[2]):
+            #        if (r, c) not in center_idx:
+            #            observed_idx.append((r, c))
 
         # Plot orders
         plot_orders_out_path = os.path.join(run_dir, f"{args.mode}_orderings_obs{obs2str(obs)}.png")
@@ -383,10 +395,11 @@ def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True,
          slice_op=None, sliced_obs=obs):
     logger.info(f"Testing with ensemble of {len(all_masks)} orderings")
     test_loss = 0.
-    for batch_idx, (input,_) in enumerate(tqdm.tqdm(test_loader,
-                                                    desc=f"Test after epoch {epoch}",
-                                                    disable=(not progress_bar),
-                                                    total=test_total)):
+    pbar = tqdm.tqdm(test_loader,
+                     desc=f"Test after epoch {epoch}",
+                     disable=(not progress_bar),
+                     total=test_total)
+    for batch_idx, (input,_) in enumerate(pbar):
         input = input.cuda(non_blocking=True)
         input_var = Variable(input)
 
@@ -406,10 +419,13 @@ def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True,
         test_loss += loss.item()
         del loss, output
 
+        deno = (batch_idx + 1) * args.batch_size * np.prod(sliced_obs) * np.log(2.)
+        pbar.set_description(f"Test after epoch {epoch} {test_loss / deno}")
+
     # FIXME: for final evaluation, don't use batch_idx * args.batch_size -- this slightly overestimates
     # the number of dims (10016 * prod(obs) * log(2) for mnist) since the last iteration might have fewer than
     # args.batch_size images. Leaving this code the same for now to allow comparison between training runs.
-    deno = batch_idx * args.batch_size * np.prod(sliced_obs) * np.log(2.)
+    deno = (batch_idx + 1) * args.batch_size * np.prod(sliced_obs) * np.log(2.)
     assert deno > 0, embed()
     test_bpd = test_loss / deno
     return test_bpd
@@ -442,20 +458,25 @@ def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch
         sample_idx = generation_idx
     else:
         if args.sample_region == "center":
-            offset1 = -args.sample_size // 2
-            offset2 = -args.sample_size // 2
+            offset1 = -args.sample_size_h // 2
+            offset2 = -args.sample_size_w // 2
         elif args.sample_region == "random_near_center":
             offset1 = int(np.random.randint(-obs[1] // 4, obs[1] // 4))
             offset2 = int(np.random.randint(-obs[2] // 4, obs[2] // 4)) 
+        elif args.sample_region == "top":
+            # should use with --sample_size_h = H/2, --sample_size_w = W
+            # samples from top left corner
+            offset1 = -(obs[1] // 2)
+            offset2 = -(obs[2] // 2)
         else:
             raise NotImplementedError(f"Unknown sampling region {args.sample_region}")
 
         # Get indices of sampling region
         sample_region = set()
         for i in range(obs[1] // 2 + offset1,
-                       obs[1] // 2 + offset1 + args.sample_size // 2):
+                       obs[1] // 2 + offset1 + args.sample_size_h):
             for j in range(obs[2] // 2 + offset2,
-                           obs[2] // 2 + offset2 + args.sample_size // 2):
+                           obs[2] // 2 + offset2 + args.sample_size_w):
                 sample_region.add((i, j))
 
         # Sort according to generation_idx
@@ -472,6 +493,7 @@ def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch
         print("batch_to_complete", type(batch_to_complete), batch_to_complete.shape, "data", type(data), data.shape)
         data[:, :, sample_idx[:, 0], sample_idx[:, 1]] = 0
 
+    context = data.clone().cpu()
 
     for i, j in tqdm.tqdm(sample_idx, desc="Sampling pixels"):
         data_v = Variable(data)
@@ -480,8 +502,9 @@ def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch
         data[:, :, i, j] = out_sample.data[:, :, i, j]
 
     if batch_to_complete is not None:
-        # Concatenate along batch dimension to visualize GT images
-        data = torch.cat([data.cpu(), batch_to_complete.cpu()], dim=0)
+        # Interleave along batch dimension to visualize GT images
+        difference = torch.abs(data.cpu() - batch_to_complete.cpu())
+        data = torch.stack([context, data.cpu(), batch_to_complete.cpu(), difference], dim=1).view(-1, *data.shape[1:])
 
     return data
 
@@ -624,7 +647,7 @@ if args.mode == "train":
                                           obs)
                         sample_t = rescaling_inv(sample_t)
                         sample_save_path = os.path.join(run_dir, f"tsample_obs{obs2str(obs)}_{epoch}_order{sample_order_i}.png")
-                        utils.save_image(sample_t, sample_save_path, nrow=5, padding=5)
+                        utils.save_image(sample_t, sample_save_path, nrow=4, padding=5, pad_value=1)
                         wandb.log({"samples": wandb.Image(sample_save_path), "epoch": epoch}, step=global_step)
                     except Exception as e:
                         logger.error("Failed to sample images! Error: %s", e)
@@ -645,8 +668,10 @@ elif args.mode == "sample":
             logger.info('sampling images with observation %s, ordering variant %d...', obs2str(obs), sample_order_i)
             sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i], batch_to_complete, obs)
             sample_t = rescaling_inv(sample_t)
-            utils.save_image(sample_t, os.path.join(run_dir, f'sample_obs{obs2str(obs)}_{checkpoint_epochs}_order{sample_order_i}.png'),
-                             nrow=5, padding=0)
+            utils.save_image(sample_t,
+                             os.path.join(run_dir,
+                                          f'{args.mode}_{args.sample_region}_{args.sample_size_h}x{args.sample_size_w}_obs{obs2str(obs)}_{checkpoint_epochs}_order{sample_order_i}.png'),
+                             nrow=4, padding=5, pad_value=1)
 elif args.mode.startswith("test"):
     if args.mode == "test_center_quarter":
         def slice_op(x):
@@ -667,8 +692,20 @@ elif args.mode.startswith("test"):
             assert y.shape[2] == H // 2
             assert y.shape[3] == W // 2
             return y
-
         sliced_obs = (obs[0], obs[1] // 2, obs[2] // 2)
+    elif args.mode == "test_top_half":
+        def slice_op(x):
+            # Take top half of image / logits
+            H, W = x.shape[2], x.shape[3]
+            minh = 0
+            maxh = H // 2
+            minw = 0
+            maxw = W
+            y = x[:, :, minh:maxh, minw:maxw]
+            assert y.shape[2] == H // 2
+            assert y.shape[3] == W
+            return y
+        sliced_obs = (obs[0], obs[1] // 2, obs[2])
     else:
         slice_op = lambda x: x
         sliced_obs = obs
@@ -681,7 +718,8 @@ elif args.mode.startswith("test"):
                             all_masks_by_obs[obs],
                             test_loader_by_obs[obs],
                             checkpoint_epochs,
-                            progress_bar=False,
+                            progress_bar=True,
                             slice_op=slice_op,
                             sliced_obs=sliced_obs)
-            logger.info(f"test loss for obs {obs2str(obs)}, sliced obs {obs2str(sliced_obs)}: %s bpd" % test_bpd)
+            logger.info(f"test loss with mode {args.mode}, randomize {args.randomize_order} for obs {obs2str(obs)}, sliced obs {obs2str(sliced_obs)}: %s bpd" % test_bpd)
+

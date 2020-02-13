@@ -185,7 +185,7 @@ def kernel_masks(generation_order_idx: np.ndarray, nrows, ncols, k=3,
         row_major_index = r * ncols + c
         for dr in range(-half_k, half_k+1):
             for dc in range(-half_k, half_k+1):
-                if dr == 0 or dc == 0:
+                if dr == 0 and dc == 0:
                     # skip center pixel of mask
                     continue
 
@@ -209,7 +209,7 @@ def kernel_masks(generation_order_idx: np.ndarray, nrows, ncols, k=3,
 def get_unfolded_masks(generation_order_idx, nrows, ncols, k=3, dilation=1, mask_type='B', observed_idx=None):
     assert mask_type in ['A', 'B']
     masks = kernel_masks(generation_order_idx, nrows, ncols, k, dilation, mask_type,
-                         set_padding=0, observed_idx=observed_idx=)
+                         set_padding=0, observed_idx=observed_idx)
     masks = torch.tensor(masks, dtype=torch.float)
     masks_unf = masks.view(1, nrows * ncols, -1).transpose(1, 2)
     return masks_unf
