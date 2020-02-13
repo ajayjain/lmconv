@@ -355,15 +355,24 @@ def load_part_of_model(path, model, optimizer=None):
     # Restore optimizer
     if optimizer:
         logger.info("Restoring optimizer from %s", path)
-        added = 0
-        for name, param in checkpoint["optimizer_state_dict"].items():
-            if name in optimizer.state_dict().keys():
-                try:
-                    optimizer.state_dict()[name].copy_(param)
-                    added += 1
-                except Exception as e:
-                    logger.error("Error loading optimizer.state_dict()[%s]: %s", name, e)
-                    pass
-        logger.info('Loadded %s fraction of optimizer params:' % (added / float(len(optimizer.state_dict().keys()))))
+        try:
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            logger.info('Loaded optimizer params directly')
+        except Exception as e:
+            logger.warning("Failed to load entire optimizer state dict at once, trying each key of state only")
+
+            added = 0
+            for name, param in checkpoint["optimizer_state_dict"]["state"].items():
+                if name in optimizer.state_dict()["state"].keys():
+                    try:
+                        optimizer.state_dict()["state"][name].copy_(param)
+                        added += 1
+                    except Exception as e:
+                        logger.error("Error loading optimizer.state_dict()['state'][%s]: %s", name, e)
+                        pass
+            logger.info('Loaded %s fraction of optimizer params:' % (added / float(len(optimizer.state_dict()["state"].keys()))))
+
+            # TODO: load param_groups key?
 
     return checkpoint["epoch"]
+
