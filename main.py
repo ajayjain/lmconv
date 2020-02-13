@@ -1,5 +1,6 @@
 from IPython import embed
 import argparse
+import itertools
 from operator import itemgetter
 import os
 import time
@@ -34,6 +35,8 @@ parser.add_argument('-t', '--save_interval', type=int, default=20,
                     help='Every how many epochs to write checkpoint?')
 parser.add_argument('-ts', '--sample_interval', type=int, default=4,
                     help='Every how many epochs to write samples?')
+parser.add_argument('-tt', '--test_interval', type=int, default=1,
+                    help='Every how many epochs to test model?')
 parser.add_argument('-r', '--load_params', type=str, default=None,
                     help='Restore training from previous model checkpoint?')
 parser.add_argument('-rd', '--run_dir', type=str, default=None,
@@ -45,6 +48,7 @@ parser.add_argument('--ours', action='store_true')
 # only for CelebAHQ
 parser.add_argument('--max_celeba_train_batches', type=int, default=-1)
 parser.add_argument('--max_celeba_test_batches', type=int, default=-1)
+# parser.add_argument('--max_test_batches', type=int, default=-1)
 parser.add_argument('--n_bits', type=int, default=8)
 # pixelcnn++ and our model
 parser.add_argument('-q', '--nr_resnet', type=int, default=5,
@@ -87,9 +91,11 @@ parser.add_argument('--randomize_order', action="store_true", help="Randomize be
                     "pixel generation order.")
 parser.add_argument('--mode', type=str, choices=["train", "sample", "test", "test_center_quarter", "test_top_half"],
                     default="train")
-parser.add_argument('--sample_region', type=str, choices=["full", "center", "random_near_center", "top"], default="full")
-parser.add_argument('--sample_size_h', type=int, default=16, help="Only used for --sample_region center or random. =H of inpainting region.")
-parser.add_argument('--sample_size_w', type=int, default=16, help="Only used for --sample_region center or random. =W of inpainting region.")
+parser.add_argument('--sample_region', type=str, choices=["full", "center", "random_near_center", "top", "custom"], default="full")
+parser.add_argument('--sample_size_h', type=int, default=16, help="Only used for --sample_region center, top or random. =H of inpainting region.")
+parser.add_argument('--sample_size_w', type=int, default=16, help="Only used for --sample_region center, top or random. =W of inpainting region.")
+parser.add_argument('--sample_offset1', type=int, default=None, help="Manually specify box offset for --sample_region custom")
+parser.add_argument('--sample_offset2', type=int, default=None, help="Manually specify box offset for --sample_region custom")
 parser.add_argument('--no_bias', action="store_true", help="Disable learnable bias for all convolutions")
 parser.add_argument('--minimize_bpd', action="store_true", help="Minimize bpd, scaling loss down by number of dimension")
 parser.add_argument('--resize_sizes', type=int, nargs="*")
@@ -464,10 +470,13 @@ def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch
             offset1 = int(np.random.randint(-obs[1] // 4, obs[1] // 4))
             offset2 = int(np.random.randint(-obs[2] // 4, obs[2] // 4)) 
         elif args.sample_region == "top":
-            # should use with --sample_size_h = H/2, --sample_size_w = W
-            # samples from top left corner
+            # should use with --sample_size_h = H/2, --sample_size_w = W. samples from top left corner
             offset1 = -(obs[1] // 2)
             offset2 = -(obs[2] // 2)
+        elif args.sample_region == "custom":
+            assert args.sample_offset1 is not None and args.sample_offset2 is not None
+            offset1 = args.sample_offset1
+            offset2 = args.sample_offset2
         else:
             raise NotImplementedError(f"Unknown sampling region {args.sample_region}")
 
@@ -589,27 +598,28 @@ if args.mode == "train":
         with torch.no_grad():
             save_dict = {}
 
-            for obs in resized_obses:
-                logger.info(f"testing with obs {obs2str(obs)}...")
-                test_bpd = test(model,
-                                all_masks_by_obs[obs],
-                                test_loader_by_obs[obs],
-                                epoch,
-                                progress_bar=True)
-                writer.add_scalar(f'test/bpd_{obs2str(obs)}', test_bpd, global_step)
-                wandb.log({f'test/bpd_{obs2str(obs)}': test_bpd, "epoch": epoch}, step=global_step)
-                logger.info(f"test loss for obs {obs2str(obs)}: %s bpd" % test_bpd)
-                save_dict[f"test_loss_{obs2str(obs)}"] = test_bpd
+            if (epoch + 1) % args.test_interval == 0:
+                for obs in resized_obses:
+                    logger.info(f"testing with obs {obs2str(obs)}...")
+                    test_bpd = test(model,
+                                    all_masks_by_obs[obs],
+                                    test_loader_by_obs[obs],
+                                    epoch,
+                                    progress_bar=True)
+                    writer.add_scalar(f'test/bpd_{obs2str(obs)}', test_bpd, global_step)
+                    wandb.log({f'test/bpd_{obs2str(obs)}': test_bpd, "epoch": epoch}, step=global_step)
+                    logger.info(f"test loss for obs {obs2str(obs)}: %s bpd" % test_bpd)
+                    save_dict[f"test_loss_{obs2str(obs)}"] = test_bpd
 
-                # Log min test bpd for smoothness
-                min_test_bpd_by_obs[obs] = min(min_test_bpd_by_obs[obs], test_bpd)
-                writer.add_scalar(f'test/min_bpd_{obs2str(obs)}', min_test_bpd_by_obs[obs], global_step)
-                wandb.log({f'test/min_bpd_{obs2str(obs)}': min_test_bpd_by_obs[obs], "epoch": epoch}, step=global_step)
-                if obs == dataset_obs:
-                    writer.add_scalar(f'test/bpd', test_bpd, global_step)
-                    writer.add_scalar(f'test/min_bpd', min_test_bpd_by_obs[obs], global_step)
-                    wandb.log({'test/bpd': test_bpd, 'epoch': epoch}, step=global_step)
-                    wandb.log({'test/min_bpd': min_test_bpd_by_obs[obs], 'epoch': epoch}, step=global_step)
+                    # Log min test bpd for smoothness
+                    min_test_bpd_by_obs[obs] = min(min_test_bpd_by_obs[obs], test_bpd)
+                    writer.add_scalar(f'test/min_bpd_{obs2str(obs)}', min_test_bpd_by_obs[obs], global_step)
+                    wandb.log({f'test/min_bpd_{obs2str(obs)}': min_test_bpd_by_obs[obs], "epoch": epoch}, step=global_step)
+                    if obs == dataset_obs:
+                        writer.add_scalar(f'test/bpd', test_bpd, global_step)
+                        writer.add_scalar(f'test/min_bpd', min_test_bpd_by_obs[obs], global_step)
+                        wandb.log({'test/bpd': test_bpd, 'epoch': epoch}, step=global_step)
+                        wandb.log({'test/min_bpd': min_test_bpd_by_obs[obs], 'epoch': epoch}, step=global_step)
 
             # Save checkpoint so we have checkpoints every save_interval epochs, as well as a rolling most recent checkpoint
             save_path = os.path.join(run_dir, f"{args.exp_id}_ep{epoch}.pth")
