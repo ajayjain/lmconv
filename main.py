@@ -411,7 +411,7 @@ def get_sampling_images(loader):
     batches_to_complete = []
     sample_iter = iter(loader)
     for _ in range(sample_batch_size // args.batch_size + 1):
-        batches_to_complete.append(next(sample_iter))
+        batches_to_complete.append(next(sample_iter)[0])  # ignore labels
     del sample_iter
 
     batch_to_complete = torch.stack(batches_to_complete, dim=0)[:sample_batch_size]
@@ -454,7 +454,8 @@ def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch
         sample_idx = np.array(sample_idx, dtype=np.int)
 
         # Mask out region in network input image
-        data = batch_to_complete.copy().cuda()
+        data = batch_to_complete.clone().cuda()
+        print("batch_to_complete", type(batch_to_complete), batch_to_complete.shape, "data", type(data), data.shape)
         data[:, :, sample_idx[:, 0], sample_idx[:, 1]] = 0
 
 
