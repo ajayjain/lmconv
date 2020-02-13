@@ -7,6 +7,7 @@ from torch.nn.parameter import Parameter
 import torch.nn.functional as F
 from torch.autograd import Variable
 from torch.nn.utils import weight_norm as wn
+from torch.utils.checkpoint import checkpoint
 
 from layers import *
 from utils import *
@@ -14,24 +15,29 @@ from utils import *
 
 class OurPixelCNNLayer_up(nn.Module):
     def __init__(self, nr_resnet, nr_filters, resnet_nonlinearity, conv_op, feature_norm_op=None,
-                 kernel_size=(5,5), weight_norm=True, dropout_prob=0.5):
+                 kernel_size=(5,5), weight_norm=True, dropout_prob=0.5, rematerialize=False):
         super(OurPixelCNNLayer_up, self).__init__()
         self.nr_resnet = nr_resnet
         self.u_stream = nn.ModuleList([gated_resnet(nr_filters, conv_op, feature_norm_op,
                                         resnet_nonlinearity, skip_connection=0, dropout_prob=dropout_prob) 
                                             for _ in range(nr_resnet)])
+
+        self.rematerialize = rematerialize
         
     def forward(self, u, mask=None):
         u_list = []
         for i in range(self.nr_resnet):
-            u  = self.u_stream[i](u, mask=mask)
+            if self.rematerialize:
+                u  = checkpoint(self.u_stream[i], u, None, mask)
+            else:
+                u  = self.u_stream[i](u, mask=mask)
             u_list  += [u]
         return u_list
 
 
 class OurPixelCNNLayer_down(nn.Module):
     def __init__(self, nr_resnet, nr_filters, resnet_nonlinearity, conv_op, feature_norm_op=None,
-                 kernel_size=(5,5), weight_norm=True, dropout_prob=0.5):
+                 kernel_size=(5,5), weight_norm=True, dropout_prob=0.5, rematerialize=False):
         super(OurPixelCNNLayer_down, self).__init__()
         self.nr_resnet = nr_resnet
 
@@ -39,16 +45,23 @@ class OurPixelCNNLayer_down(nn.Module):
                                         resnet_nonlinearity, skip_connection=1, dropout_prob=dropout_prob) 
                                             for _ in range(nr_resnet)])
 
+        self.rematerialize = rematerialize
+
     def forward(self, u, u_list, mask=None):
         for i in range(self.nr_resnet):
-            u  = self.u_stream[i](u, a=u_list.pop(), mask=mask)
+            a = u_list.pop()
+            if self.rematerialize:
+                u  = checkpoint(self.u_stream[i], u, a, mask)
+            else:
+                u  = self.u_stream[i](u, a=a, mask=mask)
         return u
 
 
 class OurPixelCNN(nn.Module):
     def __init__(self, nr_resnet=5, nr_filters=80, nr_logistic_mix=10,
                     resnet_nonlinearity='concat_elu', input_channels=3, kernel_size=(5,5),
-                    max_dilation=2, weight_norm=True, feature_norm_op=None, dropout_prob=0.5, conv_bias=True):
+                    max_dilation=2, weight_norm=True, feature_norm_op=None, dropout_prob=0.5, conv_bias=True,
+                    rematerialize=False):
         super(OurPixelCNN, self).__init__()
         assert resnet_nonlinearity == 'concat_elu'
         self.resnet_nonlinearity = lambda x : concat_elu(x)
@@ -66,11 +79,11 @@ class OurPixelCNN(nn.Module):
         down_nr_resnet = [nr_resnet] + [nr_resnet + 1] * 2
         self.down_layers = nn.ModuleList([OurPixelCNNLayer_down(down_nr_resnet[i], nr_filters, self.resnet_nonlinearity, conv_op,
                                                 feature_norm_op, kernel_size=kernel_size, weight_norm=weight_norm,
-                                                dropout_prob=dropout_prob) for i in range(3)])
+                                                dropout_prob=dropout_prob, rematerialize=rematerialize) for i in range(3)])
 
         self.up_layers = nn.ModuleList([OurPixelCNNLayer_up(nr_resnet, nr_filters, self.resnet_nonlinearity, conv_op,
                                                 feature_norm_op, kernel_size=kernel_size, weight_norm=weight_norm,
-                                                dropout_prob=dropout_prob) for _ in range(3)])
+                                                dropout_prob=dropout_prob, rematerialize=rematerialize) for _ in range(3)])
 
         self.u_init = conv_op_init(input_channels + 1, nr_filters)
         self.downsize_u_stream = nn.ModuleList([conv_op_dilated(nr_filters, nr_filters) for _ in range(2)])

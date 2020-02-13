@@ -292,7 +292,6 @@ if args.ours:
         norm_op = None
 
     assert not args.two_stream, "--two_stream cannot be used with --ours"
-    # TODO: Add rematerialization
     model = OurPixelCNN(
                 nr_resnet=args.nr_resnet,
                 nr_filters=args.nr_filters, 
@@ -303,7 +302,8 @@ if args.ours:
                 weight_norm=(args.normalization == "weight_norm"),
                 feature_norm_op=norm_op,
                 dropout_prob=args.dropout_prob,
-                conv_bias=(not args.no_bias))
+                conv_bias=(not args.no_bias),
+                rematerialize=args.rematerialize)
 
     all_generation_idx_by_obs = {}
     all_masks_by_obs = {}
