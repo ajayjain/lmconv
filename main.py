@@ -467,7 +467,7 @@ def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch
 
     if batch_to_complete is not None:
         # Concatenate along batch dimension to visualize GT images
-        data = torch.cat([data, batch_to_complete], dim=0)
+        data = torch.cat([data.cpu(), batch_to_complete.cpu()], dim=0)
 
     return data
 
