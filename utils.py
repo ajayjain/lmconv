@@ -52,18 +52,21 @@ def log_prob_from_logits(x):
     return x - m - torch.log(torch.sum(torch.exp(x - m), dim=axis, keepdim=True))
 
 
-def average_loss(log_probs_fn, x, ls):
+def average_loss(log_probs_fn, x, ls, *xargs):
     """ ensemble multiple nn outputs (ls) by averaging likelihood """
     all_log_probs = []
     for l in ls:
-        log_probs = log_probs_fn(x, l)  # B x H x W x num_logistic_mix
+        log_probs = log_probs_fn(x, l, *xargs)  # B x H x W x num_logistic_mix
         all_log_probs.append(log_probs)
     all_log_probs = torch.cat(all_log_probs, dim=3) - np.log(len(ls))
     return -torch.sum(log_sum_exp(all_log_probs))
 
 
-def discretized_mix_logistic_log_probs(x, l):
+def discretized_mix_logistic_log_probs(x, l, n_bits=8):
     """ log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval """
+    assert n_bits > 0
+    n_bins = 2. ** n_bits
+
     # Pytorch ordering
     x = x.permute(0, 2, 3, 1)
     l = l.permute(0, 2, 3, 1)
@@ -92,9 +95,9 @@ def discretized_mix_logistic_log_probs(x, l):
     means = torch.cat((means[:, :, :, 0, :].unsqueeze(3), m2, m3), dim=3)
     centered_x = x - means
     inv_stdv = torch.exp(-log_scales)
-    plus_in = inv_stdv * (centered_x + 1. / 255.)
+    plus_in = inv_stdv * (centered_x + 1. / (n_bins - 1))
     cdf_plus = torch.sigmoid(plus_in)
-    min_in = inv_stdv * (centered_x - 1. / 255.)
+    min_in = inv_stdv * (centered_x - 1. / (n_bins - 1))
     cdf_min = torch.sigmoid(min_in)
     # log probability for edge case of 0 (before scaling)
     log_cdf_plus = plus_in - F.softplus(plus_in)
@@ -130,7 +133,7 @@ def discretized_mix_logistic_log_probs(x, l):
     return log_probs
 
 
-def discretized_mix_logistic_loss(x, l):
+def discretized_mix_logistic_loss(x, l, n_bits=8):
     """ reduced (summed) log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval
     
     Args:
@@ -140,11 +143,11 @@ def discretized_mix_logistic_loss(x, l):
     Returns:
         loss: 0-dimensional NLL loss tensor
     """
-    log_probs = discretized_mix_logistic_log_probs(x, l)  # B x H x W x num_logistic_mix
+    log_probs = discretized_mix_logistic_log_probs(x, l, n_bits)  # B x H x W x num_logistic_mix
     return -torch.sum(log_sum_exp(log_probs))
  
 
-def discretized_mix_logistic_loss_averaged(x, ls):
+def discretized_mix_logistic_loss_averaged(x, ls, n_bits=8):
     """ reduced (summed) log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval
     Averages likelihood across multiple sets of mixture parameters
     
@@ -155,7 +158,7 @@ def discretized_mix_logistic_loss_averaged(x, ls):
     Returns:
         loss: 0-dimensional NLL loss tensor
     """
-    return average_loss(discretized_mix_logistic_log_probs, x, ls)
+    return average_loss(discretized_mix_logistic_log_probs, x, ls, n_bits)
 
 
 def discretized_mix_logistic_log_probs_1d(x, l):

@@ -45,6 +45,7 @@ parser.add_argument('--ours', action='store_true')
 # only for CelebAHQ
 parser.add_argument('--max_celeba_train_batches', type=int, default=-1)
 parser.add_argument('--max_celeba_test_batches', type=int, default=-1)
+parser.add_argument('--n_bits', type=int, default=8)
 # pixelcnn++ and our model
 parser.add_argument('-q', '--nr_resnet', type=int, default=5,
                     help='Number of residual blocks per stage of the model')
@@ -86,6 +87,8 @@ parser.add_argument('--randomize_order', action="store_true", help="Randomize be
                     "pixel generation order.")
 parser.add_argument('--mode', type=str, choices=["train", "sample", "test", "test_center_quarter"],
                     default="train")
+parser.add_argument('--sample_region', type=str, choices=["full", "center", "random_near_center"], default="full")
+parser.add_argument('--sample_size', type=int, default=16, help="Only used for --sample_region center or random. H/W of inpainting region.")
 parser.add_argument('--no_bias', action="store_true", help="Disable learnable bias for all convolutions")
 parser.add_argument('--minimize_bpd', action="store_true", help="Minimize bpd, scaling loss down by number of dimension")
 parser.add_argument('--resize_sizes', type=int, nargs="*")
@@ -174,6 +177,7 @@ def random_resize_collate(batch):
 
 # Create data loaders
 if 'mnist' in args.dataset :
+    assert args.n_bits == 8
     rescaling = lambda x : (x - .5) * 2.  # rescale [0, 1] images into [-1, 1] range
     rescaling_inv = lambda x : .5 * x + .5
     ds_transforms = transforms.Compose([transforms.ToTensor(), rescaling])
@@ -190,6 +194,7 @@ if 'mnist' in args.dataset :
     train_total = None
     test_total = None
 elif 'cifar' in args.dataset :
+    assert args.n_bits == 8
     rescaling = lambda x : (x - .5) * 2.  # rescale [0, 1] images into [-1, 1] range
     rescaling_inv = lambda x : .5 * x + .5
     ds_transforms = transforms.Compose([transforms.ToTensor(), rescaling])
@@ -206,8 +211,25 @@ elif 'cifar' in args.dataset :
     train_total = None
     test_total = None
 elif 'celebahq' in args.dataset :
-    rescaling = lambda x : (2. / 255) * x - 1.  # rescale uint8 images into [-1, 1] range
-    rescaling_inv = lambda x : (255. / 2) * (x + 1.)
+    if args.n_bits == 8:
+        rescaling = lambda x : (2. / 255) * x - 1.  # rescale uint8 images into [-1, 1] range
+        rescaling_inv = lambda x : (255. / 2) * (x + 1.)
+    else:
+        assert 0 < args.n_bits < 8
+        n_bins = 2. ** args.n_bits
+        depth_divisor = (2. ** (8 - args.n_bits))
+        def rescaling(x):
+            # reduce bit depth
+            x = torch.floor(x / depth_divisor)
+            # rescale images from [0, n_bins-1] into [-1, 1] range
+            x = (2. / (n_bins - 1)) * x - 1.
+            return x
+        def rescaling_inv(x):
+            # rescale images from [-1, 1] to [0, n_bins-1]
+            x = ((n_bins - 1) / 2) * (x + 1.)
+            # increase bit depth
+            x = x * depth_divisor
+            return x
 
     # NOTE: Random resizing of images during training is not supported for CelebA-HQ. Will use 256x256 resolution.
     def get_celeba_dataloaders():
@@ -241,13 +263,14 @@ else :
 # Select loss functions
 if 'mnist' in args.dataset :
     # Losses for 1-channel images
+    assert args.n_bits == 8
     loss_op = discretized_mix_logistic_loss_1d
     loss_op_averaged = discretized_mix_logistic_loss_1d_averaged
     sample_op = lambda x : sample_from_discretized_mix_logistic_1d(x, args.nr_logistic_mix)
 else:
     # Losses for 3-channel images
-    loss_op = discretized_mix_logistic_loss
-    loss_op_averaged = discretized_mix_logistic_loss_averaged
+    loss_op = lambda x, l : discretized_mix_logistic_loss(x, l, n_bits=args.n_bits)
+    loss_op_averaged = lambda x, ls : discretized_mix_logistic_loss_averaged(x, ls, n_bits=args.n_bits)
     sample_op = lambda x : sample_from_discretized_mix_logistic(x, args.nr_logistic_mix)
 
 
@@ -378,15 +401,54 @@ def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True,
     return test_bpd
 
 
-def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated):
+def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch_to_complete, obs):
     model.eval()
-    data = torch.zeros(sample_batch_size, obs[0], obs[1], obs[2])
-    data = data.cuda()
-    for num_px_sampled, (i, j) in enumerate(tqdm.tqdm(generation_idx, desc="Sampling pixels")):
+    if args.sample_region == "full":
+        data = torch.zeros(sample_batch_size, obs[0], obs[1], obs[2])
+        data = data.cuda()
+        sample_idx = generation_idx
+    else:
+        if args.sample_region == "center":
+            offset1 = -args.sample_size // 2
+            offset2 = -args.sample_size // 2
+        elif args.sample_region == "random_near_center":
+            offset1 = int(np.random.randint(-obs[1] // 4, obs[1] // 4))
+            offset2 = int(np.random.randint(-obs[2] // 4, obs[2] // 4)) 
+        else:
+            raise NotImplementedError(f"Unknown sampling region {args.sample_region}")
+
+        # Get indices of sampling region
+        sample_region = set()
+        for i in range(obs[1] // 2 + offset1,
+                       obs[1] // 2 + offset1 + args.sample_size // 2):
+            for j in range(obs[2] // 2 + offset2,
+                           obs[2] // 2 + offset2 + args.sample_size // 2):
+                sample_region.add((i, j))
+
+        # Sort according to generation_idx
+        sample_idx = []
+        num_added = 0
+        for i, j in generation_idx:
+            if (i, j) in sample_region:
+                sample_idx.append([i, j])
+                num_added += 1 
+        sample_idx = np.array(sample_idx, dtype=np.int)
+
+        # Mask out region in network input image
+        data = batch_to_complete.copy().cuda()
+        data[:, :, sample_idx[:, 0], sample_idx[:, 1]] = 0
+
+
+    for i, j in tqdm.tqdm(sample_idx, desc="Sampling pixels"):
         data_v = Variable(data)
         out = model(data_v, sample=True, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
         out_sample = sample_op(out)
         data[:, :, i, j] = out_sample.data[:, :, i, j]
+
+    if batch_to_complete is not None:
+        # Concatenate along batch dimension to visualize GT images
+        data = torch.stack([data, batch_to_complete], dim=0)
+
     return data
 
 
@@ -517,11 +579,28 @@ if args.mode == "train":
                         all_masks = all_masks_by_obs[obs]
                         all_generation_idx = all_generation_idx_by_obs[obs]
                         sample_order_i = np.random.randint(len(all_masks))
+
+                        batch_to_complete = None
+                        if args.sample_region != "full":
+                            logger.info('getting batch of images to complete...')
+                            # Get sample_batch_size images from test set
+                            batches_to_complete = []
+                            sample_iter = iter(test_loader_by_obs[obs])
+                            for _ in range(sample_batch_size // args.batch_size + 1):
+                                batches_to_complete.append(next(sample_iter))
+                            batch_to_complete = torch.stack(batches_to_complete, dim=0)[:sample_batch_size]
+                            del sample_iter
+                            logger.info('got %d images to complete with shape %s', len(batch_to_complete), batch_to_complete.shape)
+
                         logger.info('sampling images with observation %s, ordering variant %d...', obs2str(obs), sample_order_i)
-                        sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i])
+                        sample_t = sample(model,
+                                          all_generation_idx[sample_order_i],
+                                          *all_masks[sample_order_i],
+                                          batch_to_complete,
+                                          obs)
                         sample_t = rescaling_inv(sample_t)
                         sample_save_path = os.path.join(run_dir, f"tsample_obs{obs2str(obs)}_{epoch}_order{sample_order_i}.png")
-                        utils.save_image(sample_t, sample_save_path, nrow=5, padding=0)
+                        utils.save_image(sample_t, sample_save_path, nrow=5, padding=5)
                         wandb.log({"samples": wandb.Image(sample_save_path), "epoch": epoch}, step=global_step)
                     except Exception as e:
                         logger.error("Failed to sample images! Error: %s", e)
@@ -530,6 +609,7 @@ if args.mode == "train":
             # Need to manually re-create loaders to reset
             train_loader, test_loader_by_obs = get_celeba_dataloaders()
 elif args.mode == "sample":
+    # NOTE: Inpainting not supported, need to get batch of images to complete
     model.eval()
     with torch.no_grad():
         for obs in resized_obses:
@@ -537,14 +617,14 @@ elif args.mode == "sample":
             all_generation_idx = all_generation_idx_by_obs[obs]
             sample_order_i = np.random.randint(len(all_masks))
             logger.info('sampling images with observation %s, ordering variant %d...', obs2str(obs), sample_order_i)
-            sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i])
+            sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i], None, obs)
             sample_t = rescaling_inv(sample_t)
             utils.save_image(sample_t, os.path.join(run_dir, f'sample_obs{obs2str(obs)}_{checkpoint_epochs}_order{sample_order_i}.png'),
                              nrow=5, padding=0)
 elif args.mode.startswith("test"):
     if args.mode == "test_center_quarter":
-        def take_incomplete_regions(x):
-            """Take a subset of pixels from x
+        def slice_op(x):
+            """Take a subset of pixels from x for computing loss.
             
             Args:
                 x: B x C x H x W image / tensor
@@ -564,7 +644,7 @@ elif args.mode.startswith("test"):
 
         sliced_obs = (obs[0], obs[1] // 2, obs[2] // 2)
     else:
-        take_incomplete_regions = lambda x: x
+        slice_op = lambda x: x
         sliced_obs = obs
 
     model.eval()
@@ -576,6 +656,6 @@ elif args.mode.startswith("test"):
                             test_loader_by_obs[obs],
                             checkpoint_epochs,
                             progress_bar=False,
-                            slice_op=take_incomplete_regions,
+                            slice_op=slice_op,
                             sliced_obs=sliced_obs)
             logger.info(f"test loss for obs {obs2str(obs)}, sliced obs {obs2str(sliced_obs)}: %s bpd" % test_bpd)
