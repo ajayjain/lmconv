@@ -133,14 +133,14 @@ else:
         _name = f"{_name}+{args.exp_name}"
     run_dir = os.path.join("runs", _name)
     if args.mode == "train":
-        os.makedirs(run_dir, exist_ok=False)
+        os.makedirs(run_dir, exist_ok=args.load_last_params)
 assert os.path.exists(run_dir), "Did not find run directory, check --run_dir argument"
 
 wandb.init(project="autoreg_orders", id=f"{args.exp_id}_{args.mode}", name=f"{run_dir}_{args.mode}", job_type=args.mode)
 
 # Log arguments
 wandb.config.update(args)
-logger = configure_logger(os.path.join(run_dir, f"{args.mode}.log"))
+logger = configure_logger(os.path.join(run_dir, f"{args.mode}_{np.random.randint(1000)}.log"))
 logger.info("Run directory: %s", run_dir)
 logger.info("Arguments: %s", args)
 for k, v in vars(args).items():
@@ -406,7 +406,7 @@ if args.load_params:
     else:
         load_params = os.path.join(run_dir, args.load_params)
     # Load params
-    checkpoint_epochs = load_part_of_model(load_params,
+    checkpoint_epochs, checkpoint_step = load_part_of_model(load_params,
                                            model=model.module,
                                            optimizer=None if not args.do_not_load_optimizer else optimizer)
     logger.info(f"Model parameters loaded from {load_params}, from after {checkpoint_epochs} training epochs")
@@ -427,15 +427,16 @@ elif args.load_last_params:
         load_params = os.path.join(run_dir, last_checkpoint_name)
         logger.info(f"Most recent checkpoint: {last_checkpoint_name}")
         # Load params
-        checkpoint_epochs = load_part_of_model(load_params,
+        checkpoint_epochs, checkpoint_step = load_part_of_model(load_params,
                                             model=model.module,
                                             optimizer=None if not args.do_not_load_optimizer else optimizer)
         logger.info(f"Model parameters loaded from {load_params}, from after {checkpoint_epochs} training epochs")
     else:
         logger.info("No checkpoints found")
         checkpoint_epochs = -1
+        checkpoint_step = -1
 else:
-    checkpoint_epochs = -1
+    checkpoint_step = -1
 
 
 def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True,
@@ -573,7 +574,7 @@ def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch
 if args.mode == "train":
     logger.info("starting training")
     writer = SummaryWriter(log_dir=run_dir)
-    global_step = 0
+    global_step = checkpoint_step + 1
     min_train_bpd = 1e12
     min_test_bpd_by_obs = {obs: 1e12 for obs in resized_obses}
     last_saved_epoch = -1
@@ -677,6 +678,7 @@ if args.mode == "train":
             save_path = os.path.join(run_dir, f"{args.exp_id}_ep{epoch}.pth")
             logger.info('saving model to %s...', save_path)
             save_dict["epoch"] = epoch
+            save_dict["global_step"] = global_step
             save_dict["args"] = vars(args)
             try:
                 save_dict["model_state_dict"] = model.module.state_dict()
