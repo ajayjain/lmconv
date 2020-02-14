@@ -103,6 +103,7 @@ parser.add_argument('--no_bias', action="store_true", help="Disable learnable bi
 parser.add_argument('--minimize_bpd', action="store_true", help="Minimize bpd, scaling loss down by number of dimension")
 parser.add_argument('--resize_sizes', type=int, nargs="*")
 parser.add_argument('--resize_probs', type=float, nargs="*")
+parser.add_argument('--base_order_reflect_rows', action="store_true")
 # memory
 parser.add_argument('--rematerialize', action="store_true", help="Recompute some activations during backwards to save memory")
 # plotting
@@ -327,8 +328,9 @@ if args.ours:
         # Get generation orders
         base_generation_idx = get_generation_order_idx(args.order, obs[1], obs[2])
 
-        # FIXME: HARDCODED REFLECTION OF ORDER TO DO TOP HALF INPAINTING
-        # base_generation_idx = reflect_rows(base_generation_idx, obs)
+        if args.base_order_reflect_rows:
+            # REFLECTION OF ORDER TO DO TOP HALF INPAINTING
+            base_generation_idx = reflect_rows(base_generation_idx, obs)
 
         if args.randomize_order:
             all_generation_idx = augment_orders(base_generation_idx, obs)
