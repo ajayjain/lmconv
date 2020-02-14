@@ -90,7 +90,8 @@ parser.add_argument('-nm', '--normalization', type=str, default='weight_norm',
 parser.add_argument('-af', '--accum_freq', type=int, default=1,
                     help='Batches per optimization step. Used for gradient accumulation')
 parser.add_argument('--two_stream', action="store_true", help="Enable two stream model")
-parser.add_argument('--order', type=str, choices=["raster_scan", "s_curve", "hilbert", "gilbert2d", "s_curve_center_quarter_last"],
+parser.add_argument('--order', type=str, nargs="+",
+                    choices=["raster_scan", "s_curve", "hilbert", "gilbert2d", "s_curve_center_quarter_last"],
                     help="Autoregressive generation order")
 parser.add_argument('--randomize_order', action="store_true", help="Randomize between 8 variants of the "
                     "pixel generation order.")
@@ -329,16 +330,18 @@ if args.ours:
     all_masks_by_obs = {}
     for obs in resized_obses:
         # Get generation orders
-        base_generation_idx = get_generation_order_idx(args.order, obs[1], obs[2])
+        all_generation_idx = []
+        for order in args.order:
+            base_generation_idx = get_generation_order_idx(order, obs[1], obs[2])
 
-        if args.base_order_reflect_rows:
-            # REFLECTION OF ORDER TO DO TOP HALF INPAINTING
-            base_generation_idx = reflect_rows(base_generation_idx, obs)
+            if args.base_order_reflect_rows:
+                # REFLECTION OF ORDER TO DO TOP HALF INPAINTING
+                base_generation_idx = reflect_rows(base_generation_idx, obs)
 
-        if args.randomize_order:
-            all_generation_idx = augment_orders(base_generation_idx, obs)
-        else:
-            all_generation_idx = [base_generation_idx]
+            if args.randomize_order:
+                all_generation_idx.extend(augment_orders(base_generation_idx, obs))
+            else:
+                all_generation_idx.append(base_generation_idx)
 
         # Generate center square last for inpainting
         observed_idx = None
