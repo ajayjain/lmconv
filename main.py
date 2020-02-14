@@ -39,6 +39,7 @@ parser.add_argument('-tt', '--test_interval', type=int, default=1,
                     help='Every how many epochs to test model?')
 parser.add_argument('-r', '--load_params', type=str, default=None,
                     help='Restore training from previous model checkpoint?')
+parser.add_argument('--do_not_load_optimizer', action="store_true")
 parser.add_argument('-rd', '--run_dir', type=str, default=None,
                     help="Optionally specify run directory. One will be generated otherwise."
                          "Use to save log files in a particular place")
@@ -48,6 +49,7 @@ parser.add_argument('--ours', action='store_true')
 # only for CelebAHQ
 parser.add_argument('--max_celeba_train_batches', type=int, default=-1)
 parser.add_argument('--max_celeba_test_batches', type=int, default=-1)
+parser.add_argument('--celeba_size', type=int, default=256)
 # parser.add_argument('--max_test_batches', type=int, default=-1)
 parser.add_argument('--n_bits', type=int, default=8)
 # pixelcnn++ and our model
@@ -145,7 +147,7 @@ sample_batch_size = args.sample_batch_size
 dataset_obs = {
     'mnist': (1, 28, 28),
     'cifar': (3, 32, 32),
-    'celebahq': (3, 256, 256)
+    'celebahq': (3, args.celeba_size, args.celeba_size)
 }[args.dataset]
 input_channels = dataset_obs[0]
 data_loader_kwargs = {'num_workers':1, 'pin_memory':True, 'drop_last':True, 'batch_size':args.batch_size}
@@ -178,8 +180,8 @@ def get_resize_collate_fn(obs, default_collate=torch.utils.data.dataloader.defau
         return [X, y]
     return resize_collate_fn
 
-def random_resize_collate(batch):
-    X, y = torch.utils.data.dataloader.default_collate(batch)
+def random_resize_collate(batch, default_collate=torch.utils.data.dataloader.default_collate):
+    X, y = default_collate(batch)
     obs = random_resized_obs()
     if obs != dataset_obs:
         X = torch.nn.functional.interpolate(X, size=obs[1:], mode="bilinear")
@@ -249,15 +251,17 @@ elif 'celebahq' in args.dataset :
         kwargs = dict(data_loader_kwargs)
         kwargs["num_workers"] = 0
         train_loader = get_celeba_dataloader(args.data_dir, "train",
-                                            collate_fn=itemgetter(0),
+                                            collate_fn=itemgetter(0), # lambda batch: random_resize_collate(batch, itemgetter(0)),
                                             batch_transform=rescaling,
                                             max_batches=args.max_celeba_train_batches,
+                                            size=args.celeba_size,
                                             **kwargs)
         test_loader_by_obs = {
             obs: get_celeba_dataloader(args.data_dir, "validation",
                                     collate_fn=get_resize_collate_fn(obs, itemgetter(0)),
                                     batch_transform=rescaling,
                                     max_batches=args.max_celeba_test_batches,
+                                    size=args.celeba_size,
                                     **kwargs)
             for obs in resized_obses
         }
@@ -394,7 +398,9 @@ if args.load_params:
         load_params = args.load_params
     else:
         load_params = os.path.join(run_dir, args.load_params)
-    checkpoint_epochs = load_part_of_model(load_params, model=model.module, optimizer=optimizer)
+    checkpoint_epochs = load_part_of_model(load_params,
+                                           model=model.module,
+                                           optimizer=None if not args.do_not_load_optimizer else optimizer)
     logger.info(f"Model parameters loaded from {load_params}, from after {checkpoint_epochs} training epochs")
 else:
     checkpoint_epochs = -1
@@ -408,7 +414,10 @@ def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True,
                      desc=f"Test after epoch {epoch}",
                      disable=(not progress_bar),
                      total=test_total)
+    num_images = 0
     for batch_idx, (input,_) in enumerate(pbar):
+        num_images += input.shape[0]
+
         input = input.cuda(non_blocking=True)
         input_var = Variable(input)
 
@@ -428,13 +437,13 @@ def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True,
         test_loss += loss.item()
         del loss, output
 
-        deno = (batch_idx + 1) * args.batch_size * np.prod(sliced_obs) * np.log(2.)
+        deno = num_images * np.prod(sliced_obs) * np.log(2.)
         pbar.set_description(f"Test after epoch {epoch} {test_loss / deno}")
 
     # FIXME: for final evaluation, don't use batch_idx * args.batch_size -- this slightly overestimates
     # the number of dims (10016 * prod(obs) * log(2) for mnist) since the last iteration might have fewer than
     # args.batch_size images. Leaving this code the same for now to allow comparison between training runs.
-    deno = (batch_idx + 1) * args.batch_size * np.prod(sliced_obs) * np.log(2.)
+    deno = num_images * np.prod(sliced_obs) * np.log(2.)
     assert deno > 0, embed()
     test_bpd = test_loss / deno
     return test_bpd

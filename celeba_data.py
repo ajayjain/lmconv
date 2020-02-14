@@ -33,9 +33,10 @@ class TFRecordIterableDataset(torch.utils.data.IterableDataset):
                  resolution=256,
                  is_training=True,
                  tf_num_parallel_map=16,
+                 size=256,
                  batch_transform=None,
                  max_batches=-1):
-        super(TFRecordIterableDataset).__init__()
+        super(TFRecordIterableDataset, self).__init__()
         
         files = tf.data.Dataset.list_files(tfr_file_pattern)
         if is_training:
@@ -50,12 +51,20 @@ class TFRecordIterableDataset(torch.utils.data.IterableDataset):
         self.batched_tf_tensor_iterator = \
             tf.compat.v1.data.make_one_shot_iterator(dset)
 
-        if batch_transform:
-            # Convert to torch, apply user-specified batch tensor transformation, and add label
-            self.batch_transform = lambda tf_tensor: (batch_transform(tf_to_torch(tf_tensor)), None)
-        else:
-            # Convert to torch and add label
-            self.batch_transform = lambda tf_tensor: (tf_to_torch(tf_tensor), None)
+        def _bt(tf_tensor):
+            """Per-batch transformation"""
+            # convert to torch
+            X = tf_to_torch(tf_tensor)
+            # apply user-specified batch tensor transformatiom
+            if batch_transform:
+                X = batch_transform(X)
+            # resize images in batch
+            if size != 256:
+                # NOTE: user-specified batch_transform should convert image to float
+                X = torch.nn.functional.interpolate(X, size=(size, size), mode="bilinear")
+            # add label
+            return (X, None)
+        self.batch_transform = _bt
 
         self.max_batches = max_batches
 
@@ -72,6 +81,7 @@ class TFRecordIterableDataset(torch.utils.data.IterableDataset):
 def get_celeba_dataloader(data_dir="data",
                           split="train",
                           tf_num_parallel_map=16,
+                          size=256,
                           batch_transform=None,
                           max_batches=-1,
                           **data_loader_kwargs):
@@ -85,7 +95,13 @@ def get_celeba_dataloader(data_dir="data",
                                       resolution=256,
                                       is_training=(split == "train"),
                                       tf_num_parallel_map=tf_num_parallel_map,
+                                      size=size,
                                       batch_transform=batch_transform,
                                       max_batches=max_batches)
-    assert data_loader_kwargs.get("num_workers", 0) == 0
-    return torch.utils.data.DataLoader(dataset, **data_loader_kwargs)
+
+    # override batch size, since the dataset handles batching
+    kwargs = dict(data_loader_kwargs.items())
+    if "batch_size" in kwargs:
+        kwargs["batch_size"] = 1
+    assert kwargs.get("num_workers", 0) == 0
+    return torch.utils.data.DataLoader(dataset, **kwargs)
