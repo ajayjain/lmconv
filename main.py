@@ -3,6 +3,7 @@ import argparse
 import itertools
 from operator import itemgetter
 import os
+import re
 import time
 
 from PIL import Image
@@ -39,6 +40,8 @@ parser.add_argument('-tt', '--test_interval', type=int, default=1,
                     help='Every how many epochs to test model?')
 parser.add_argument('-r', '--load_params', type=str, default=None,
                     help='Restore training from previous model checkpoint?')
+parser.add_argument('--load_last_params', action="store_true",
+                    help='Restore training from the last model checkpoint in the run dir?')
 parser.add_argument('--do_not_load_optimizer', action="store_true")
 parser.add_argument('-rd', '--run_dir', type=str, default=None,
                     help="Optionally specify run directory. One will be generated otherwise."
@@ -395,15 +398,39 @@ scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=args.lr_decay)
 
 # Load model parameters from checkpoint
 if args.load_params:
-    # TODO: Restore optimizer
     if os.path.exists(args.load_params):
         load_params = args.load_params
     else:
         load_params = os.path.join(run_dir, args.load_params)
+    # Load params
     checkpoint_epochs = load_part_of_model(load_params,
                                            model=model.module,
                                            optimizer=None if not args.do_not_load_optimizer else optimizer)
     logger.info(f"Model parameters loaded from {load_params}, from after {checkpoint_epochs} training epochs")
+elif args.load_last_params:
+    # Find the most recent checkpoint (highest epoch number).
+    checkpoint_re = f"{args.exp_id}_ep([0-9]+)\\.pth"
+    checkpoint_files = []
+    checkpoint_epochs = []
+    for f in os.listdir(run_dir):
+        match = re.match(checkpoint_re, f)
+        if match:
+            checkpoint_files.append(f)
+            ep = int(match.group(1))
+            checkpoint_epochs.append(ep)
+            logger.info(f"Found checkpoint {f} with {ep} epochs of training")
+    if checkpoint_files:
+        last_checkpoint_name = checkpoint_files[int(np.argmax(checkpoint_epochs))]
+        load_params = os.path.join(run_dir, last_checkpoint_name)
+        logger.info(f"Most recent checkpoint: {last_checkpoint_name}")
+        # Load params
+        checkpoint_epochs = load_part_of_model(load_params,
+                                            model=model.module,
+                                            optimizer=None if not args.do_not_load_optimizer else optimizer)
+        logger.info(f"Model parameters loaded from {load_params}, from after {checkpoint_epochs} training epochs")
+    else:
+        logger.info("No checkpoints found")
+        checkpoint_epochs = -1
 else:
     checkpoint_epochs = -1
 
@@ -510,6 +537,8 @@ def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch
                 sample_idx.append([i, j])
                 num_added += 1 
         sample_idx = np.array(sample_idx, dtype=np.int)
+
+        logger.info(f"Sample idx {sample_idx}")
 
         # Mask out region in network input image
         data = batch_to_complete.clone().cuda()
