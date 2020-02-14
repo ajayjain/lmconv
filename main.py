@@ -96,6 +96,7 @@ parser.add_argument('--sample_size_h', type=int, default=16, help="Only used for
 parser.add_argument('--sample_size_w', type=int, default=16, help="Only used for --sample_region center, top or random. =W of inpainting region.")
 parser.add_argument('--sample_offset1', type=int, default=None, help="Manually specify box offset for --sample_region custom")
 parser.add_argument('--sample_offset2', type=int, default=None, help="Manually specify box offset for --sample_region custom")
+parser.add_argument('--sample_batch_size', type=int, default=25, help="Number of images to sample")
 parser.add_argument('--no_bias', action="store_true", help="Disable learnable bias for all convolutions")
 parser.add_argument('--minimize_bpd', action="store_true", help="Minimize bpd, scaling loss down by number of dimension")
 parser.add_argument('--resize_sizes', type=int, nargs="*")
@@ -128,7 +129,7 @@ else:
         os.makedirs(run_dir, exist_ok=False)
 assert os.path.exists(run_dir), "Did not find run directory, check --run_dir argument"
 
-wandb.init(project="autoreg_orders", id=str(args.exp_id), name=run_dir, job_type=args.mode)
+wandb.init(project="autoreg_orders", id=f"{args.exp_id}_{args.mode}", name=f"{run_dir}_{args.mode}", job_type=args.mode)
 
 # Log arguments
 wandb.config.update(args)
@@ -140,7 +141,7 @@ for k, v in vars(args).items():
 
 
 # Create data loaders
-sample_batch_size = 25
+sample_batch_size = args.sample_batch_size
 dataset_obs = {
     'mnist': (1, 28, 28),
     'cifar': (3, 32, 32),
@@ -222,23 +223,25 @@ elif 'cifar' in args.dataset :
 elif 'celebahq' in args.dataset :
     if args.n_bits == 8:
         rescaling = lambda x : (2. / 255) * x - 1.  # rescale uint8 images into [-1, 1] range
-        rescaling_inv = lambda x : (255. / 2) * (x + 1.)
+        rescaling_inv = lambda x : .5 * x + .5  # rescale [-1, 1] range to [0, 1] range
+        #rescaling_inv = lambda x : (255. / 2) * (x + 1.)  # rescale [-1, 1] range to [0, 255] range
     else:
         assert 0 < args.n_bits < 8
         n_bins = 2. ** args.n_bits
         depth_divisor = (2. ** (8 - args.n_bits))
         def rescaling(x):
-            # reduce bit depth
+            # reduce bit depth, from [0, 255] to [0, n_bins-1] range
             x = torch.floor(x / depth_divisor)
             # rescale images from [0, n_bins-1] into [-1, 1] range
             x = (2. / (n_bins - 1)) * x - 1.
             return x
-        def rescaling_inv(x):
-            # rescale images from [-1, 1] to [0, n_bins-1]
-            x = ((n_bins - 1) / 2) * (x + 1.)
-            # increase bit depth
-            x = x * depth_divisor
-            return x
+        rescaling_inv = lambda x : .5 * x + .5  # rescale [-1, 1] range to [0, 1] range
+        #def rescaling_inv(x):
+        #    # rescale images from [-1, 1] to [0, n_bins-1]
+        #    x = ((n_bins - 1) / 2) * (x + 1.)
+        #    # increase bit depth to [0, 255] range
+        #    x = x * depth_divisor
+        #    return x
 
     # NOTE: Random resizing of images during training is not supported for CelebA-HQ. Will use 256x256 resolution.
     def get_celeba_dataloaders():
@@ -502,18 +505,24 @@ def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch
         print("batch_to_complete", type(batch_to_complete), batch_to_complete.shape, "data", type(data), data.shape)
         data[:, :, sample_idx[:, 0], sample_idx[:, 1]] = 0
 
-    context = data.clone().cpu()
+    context = rescaling_inv(data).cpu()
+    batch_to_complete = rescaling_inv(batch_to_complete).cpu()
 
+    logger.info(f"Before sampling, data has range {data.min().item()}-{data.max().item()} (mean {data.mean().item()}), dtype={data.dtype} {type(data)}")
+    logger.info(f"Example context: {context.numpy()}")
     for i, j in tqdm.tqdm(sample_idx, desc="Sampling pixels"):
         data_v = Variable(data)
         out = model(data_v, sample=True, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
-        out_sample = sample_op(out)
-        data[:, :, i, j] = out_sample.data[:, :, i, j]
+        out_sample = sample_op(out).data[:, :, i, j]
+        data[:, :, i, j] = out_sample
+        logger.info(f"Sampled pixel {i},{j}, with batchwise range {out_sample.min().item()}-{out_sample.max().item()} (mean {out_sample.mean().item()}), dtype={out_sample.dtype} {type(out_sample)}")
+    data = rescaling_inv(data).cpu()
 
     if batch_to_complete is not None:
         # Interleave along batch dimension to visualize GT images
-        difference = torch.abs(data.cpu() - batch_to_complete.cpu())
-        data = torch.stack([context, data.cpu(), batch_to_complete.cpu(), difference], dim=1).view(-1, *data.shape[1:])
+        difference = torch.abs(data - batch_to_complete)
+        logger.info(f"Context range {context.min()}-{context.max()}. Data range {data.min()}-{data.max()}. batch_to_complete range {batch_to_complete.min()}-{batch_to_complete.max()}")
+        data = torch.stack([context, data, batch_to_complete, difference], dim=1).view(-1, *data.shape[1:])
 
     return data
 
@@ -655,9 +664,8 @@ if args.mode == "train":
                                           *all_masks[sample_order_i],
                                           batch_to_complete,
                                           obs)
-                        sample_t = rescaling_inv(sample_t)
                         sample_save_path = os.path.join(run_dir, f"tsample_obs{obs2str(obs)}_{epoch}_order{sample_order_i}.png")
-                        utils.save_image(sample_t, sample_save_path, nrow=4, padding=5, pad_value=1)
+                        utils.save_image(sample_t, sample_save_path, nrow=4, padding=5, pad_value=1, scale_each=False)
                         wandb.log({"samples": wandb.Image(sample_save_path), "epoch": epoch}, step=global_step)
                     except Exception as e:
                         logger.error("Failed to sample images! Error: %s", e)
@@ -677,11 +685,10 @@ elif args.mode == "sample":
             sample_order_i = np.random.randint(len(all_masks))
             logger.info('sampling images with observation %s, ordering variant %d...', obs2str(obs), sample_order_i)
             sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i], batch_to_complete, obs)
-            sample_t = rescaling_inv(sample_t)
             utils.save_image(sample_t,
                              os.path.join(run_dir,
                                           f'{args.mode}_{args.sample_region}_{args.sample_size_h}x{args.sample_size_w}_obs{obs2str(obs)}_{checkpoint_epochs}_order{sample_order_i}.png'),
-                             nrow=4, padding=5, pad_value=1)
+                             nrow=4, padding=5, pad_value=1, scale_each=False)
 elif args.mode.startswith("test"):
     if args.mode == "test_center_quarter":
         def slice_op(x):
