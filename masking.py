@@ -95,7 +95,7 @@ def plot_order(generation_idx, obs, out_path=None):
     else:
         plt.show()
 
-def plot_orders(generation_idx_list, obs, size=5, plot_rows=4, out_path=None):
+def plot_orders(generation_idx_list, obs, size=5, plot_rows=4, out_path=None, **kwargs):
     """Plot multiple generation coordinate lists in a single figure. A star on the curve
     denotes the pixel generated last. obs is a three-tuple of input image dimensions,
     (input-channels-unused, num_rows, num_cols)"""
@@ -116,7 +116,7 @@ def plot_orders(generation_idx_list, obs, size=5, plot_rows=4, out_path=None):
         if pc == 0:
             pr += 1
     if out_path:
-        plt.savefig(out_path)
+        plt.savefig(out_path, **kwargs)
     else:
         plt.show()
 
