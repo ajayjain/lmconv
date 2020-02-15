@@ -103,6 +103,8 @@ parser.add_argument('--sample_size_w', type=int, default=16, help="Only used for
 parser.add_argument('--sample_offset1', type=int, default=None, help="Manually specify box offset for --sample_region custom")
 parser.add_argument('--sample_offset2', type=int, default=None, help="Manually specify box offset for --sample_region custom")
 parser.add_argument('--sample_batch_size', type=int, default=25, help="Number of images to sample")
+parser.add_argument('--sample_mixture_temperature', type=float, default=1.0)
+parser.add_argument('--sample_logistic_temperature', type=float, default=1.0)
 parser.add_argument('--no_bias', action="store_true", help="Disable learnable bias for all convolutions")
 parser.add_argument('--minimize_bpd', action="store_true", help="Minimize bpd, scaling loss down by number of dimension")
 parser.add_argument('--resize_sizes', type=int, nargs="*")
@@ -295,7 +297,7 @@ else:
     # Losses for 3-channel images
     loss_op = lambda x, l : discretized_mix_logistic_loss(x, l, n_bits=args.n_bits)
     loss_op_averaged = lambda x, ls : discretized_mix_logistic_loss_averaged(x, ls, n_bits=args.n_bits)
-    sample_op = lambda x : sample_from_discretized_mix_logistic(x, args.nr_logistic_mix)
+    sample_op = lambda x : sample_from_discretized_mix_logistic(x, args.nr_logistic_mix, args.sample_mixture_temperature, args.sample_logistic_temperature)
 
 
 # Construct model
@@ -369,10 +371,13 @@ if args.ours:
             #            observed_idx.append((r, c))
 
         # Plot orders
-        plot_orders_out_path = os.path.join(run_dir, f"{args.mode}_orderings_obs{obs2str(obs)}.png")
+        if args.mode == "sample":
+            plot_orders_out_path = os.path.join(run_dir, f"{args.mode}_{args.sample_region}_{args.sample_size_h}x{args.sample_size_w}_o1{args.sample_offset1}_o2{args.sample_offset2}_orderings_obs{obs2str(obs)}.png")
+        else:
+            plot_orders_out_path = os.path.join(run_dir, f"{args.mode}_orderings_obs{obs2str(obs)}.png")
         plot_orders(all_generation_idx, obs, size=5, plot_rows=min(len(all_generation_idx), 4),
                     out_path=plot_orders_out_path)
-        wandb.log({f"{args.mode}_orderings_obs{obs2str(obs)}": wandb.Image(plot_orders_out_path)})
+        wandb.log({plot_orders_out_path: wandb.Image(plot_orders_out_path)})
 
         all_generation_idx_by_obs[obs] = all_generation_idx
 
@@ -732,7 +737,7 @@ if args.mode == "train":
                                           obs)
                         sample_save_path = os.path.join(run_dir, f"tsample_obs{obs2str(obs)}_{epoch}_order{sample_order_i}.png")
                         utils.save_image(sample_t, sample_save_path, nrow=4, padding=5, pad_value=1, scale_each=False)
-                        wandb.log({"samples": wandb.Image(sample_save_path), "epoch": epoch}, step=global_step)
+                        wandb.log({sample_save_path: wandb.Image(sample_save_path), "epoch": epoch}, step=global_step)
                     except Exception as e:
                         logger.error("Failed to sample images! Error: %s", e)
         
@@ -751,10 +756,10 @@ elif args.mode == "sample":
             sample_order_i = np.random.randint(len(all_masks))
             logger.info('sampling images with observation %s, ordering variant %d...', obs2str(obs), sample_order_i)
             sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i], batch_to_complete, obs)
-            utils.save_image(sample_t,
-                             os.path.join(run_dir,
-                                          f'{args.mode}_{args.sample_region}_{args.sample_size_h}x{args.sample_size_w}_obs{obs2str(obs)}_{checkpoint_epochs}_order{sample_order_i}.png'),
+            sample_save_path = os.path.join(run_dir, f'{args.mode}_{args.sample_region}_{args.sample_size_h}x{args.sample_size_w}_o1{args.sample_offset1}_o2{args.sample_offset2}_obs{obs2str(obs)}_ep{checkpoint_epochs}_order{sample_order_i}.png')
+            utils.save_image(sample_t, sample_save_path,
                              nrow=4, padding=5, pad_value=1, scale_each=False)
+            wandb.log({sample_save_path: wandb.Image(sample_save_path), "epoch": checkpoint_epochs})
 elif args.mode.startswith("test"):
     if args.mode == "test_center_quarter":
         def slice_op(x):
