@@ -529,6 +529,8 @@ def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch
         data = torch.zeros(sample_batch_size, obs[0], obs[1], obs[2])
         data = data.cuda()
         sample_idx = generation_idx
+        context = None
+        batch_to_complete = None
     else:
         if args.sample_region == "center":
             offset1 = -args.sample_size_h // 2
@@ -571,20 +573,29 @@ def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch
         print("batch_to_complete", type(batch_to_complete), batch_to_complete.shape, "data", type(data), data.shape)
         data[:, :, sample_idx[:, 0], sample_idx[:, 1]] = 0
 
-    context = rescaling_inv(data).cpu()
-    batch_to_complete = rescaling_inv(batch_to_complete).cpu()
+        context = rescaling_inv(data).cpu()
+        batch_to_complete = rescaling_inv(batch_to_complete).cpu()
+
+        logger.info(f"Example context: {context.numpy()}")
 
     logger.info(f"Before sampling, data has range {data.min().item()}-{data.max().item()} (mean {data.mean().item()}), dtype={data.dtype} {type(data)}")
-    logger.info(f"Example context: {context.numpy()}")
-    for i, j in tqdm.tqdm(sample_idx, desc="Sampling pixels"):
+    for n_pix, (i, j) in enumerate(tqdm.tqdm(sample_idx, desc="Sampling pixels")):
         data_v = Variable(data)
+        t1 = time.time()
         out = model(data_v, sample=True, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
+        t2 = time.time()
         out_sample = sample_op(out).data[:, :, i, j]
+        logger.info("%d %d,%d Time to infer logits=%f s, sample=%f s", n_pix, i, j, t2-t1, time.time()-t2)
         data[:, :, i, j] = out_sample
         logger.info(f"Sampled pixel {i},{j}, with batchwise range {out_sample.min().item()}-{out_sample.max().item()} (mean {out_sample.mean().item()}), dtype={out_sample.dtype} {type(out_sample)}")
+
+        if (n_pix <= 256 and n_pix % 32 == 0) or n_pix % 256 == 0:
+            sample_save_path = os.path.join(run_dir, f'{args.mode}_{args.sample_region}_{args.sample_size_h}x{args.sample_size_w}_o1{args.sample_offset1}_o2{args.sample_offset2}_obs{obs2str(obs)}_ep{checkpoint_epochs}_order{sample_order_i}_{n_pix}of{len(sample_idx)}pix.png')
+            utils.save_image(rescaling_inv(data), sample_save_path, nrow=4, padding=5, pad_value=1, scale_each=False)
+            wandb.log({sample_save_path: wandb.Image(sample_save_path)}, step=n_pix)
     data = rescaling_inv(data).cpu()
 
-    if batch_to_complete is not None:
+    if batch_to_complete is not None and context is not None:
         # Interleave along batch dimension to visualize GT images
         difference = torch.abs(data - batch_to_complete)
         logger.info(f"Context range {context.min()}-{context.max()}. Data range {data.min()}-{data.max()}. batch_to_complete range {batch_to_complete.min()}-{batch_to_complete.max()}")

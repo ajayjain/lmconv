@@ -286,7 +286,7 @@ def sample_from_discretized_mix_logistic(l, nr_mix, mixture_temperature=1.0, log
     temp.uniform_(1e-5, 1. - 1e-5)
     temp = logit_probs.data - torch.log(- torch.log(temp))
     _, argmax = temp.max(dim=3)
-   
+
     one_hot = to_one_hot(argmax, nr_mix)
     sel = one_hot.view(xs[:-1] + [1, nr_mix])
     # select logistic parameters
