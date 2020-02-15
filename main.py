@@ -108,8 +108,11 @@ parser.add_argument('--minimize_bpd', action="store_true", help="Minimize bpd, s
 parser.add_argument('--resize_sizes', type=int, nargs="*")
 parser.add_argument('--resize_probs', type=float, nargs="*")
 parser.add_argument('--base_order_reflect_rows', action="store_true")
-# memory
+parser.add_argument('--base_order_reflect_cols', action="store_true")
+parser.add_argument('--base_order_transpose', action="store_true")
+# memory and precision
 parser.add_argument('--rematerialize', action="store_true", help="Recompute some activations during backwards to save memory")
+parser.add_argument('--amp_opt_level', type=str, default=None)
 # plotting
 parser.add_argument('--plot_masks', action="store_true")
 
@@ -334,9 +337,17 @@ if args.ours:
         for order in args.order:
             base_generation_idx = get_generation_order_idx(order, obs[1], obs[2])
 
+            # Suggested orders
+            #   BOTTOM HALF INPAINTING: (default)
+            #   TOP HALF INPAINTING: --base_order_reflect_rows
+            #   RIGHT HALF INPAINTING: --base_order_transpose
+            #   LEFT HALF INPAINTING: --base_order_transpose --base_order_reflect_cols
+            if args.base_order_transpose:
+                base_generation_idx = transpose(base_generation_idx, obs)
             if args.base_order_reflect_rows:
-                # REFLECTION OF ORDER TO DO TOP HALF INPAINTING
                 base_generation_idx = reflect_rows(base_generation_idx, obs)
+            if args.base_order_reflect_cols:
+                base_generation_idx = reflect_cols(base_generation_idx, obs)
 
             if args.randomize_order:
                 all_generation_idx.extend(augment_orders(base_generation_idx, obs))
@@ -388,15 +399,21 @@ else:
     for obs in resized_obses:
         all_generation_idx_by_obs[obs] = [get_generation_order_idx("raster_scan", obs[1], obs[2])]
         all_masks_by_obs[obs] = [(None, None, None)]
-model = nn.DataParallel(model)
 model = model.cuda()
-wandb.watch(model)
-
 
 # Create optimizer
 # NOTE: PixelCNN++ TF repo uses betas=(0.95, 0.9995), different than PyTorch defaults
 optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=args.lr_decay)
+
+if args.amp_opt_level:
+    from apex import amp
+    model, optimizer = amp.initialize(model, optimizer, opt_level=args.amp_opt_level)
+
+model = nn.DataParallel(model)
+wandb.watch(model)
+
+
 
 
 # Load model parameters from checkpoint
@@ -600,7 +617,11 @@ if args.mode == "train":
 
             if batch_idx % args.accum_freq == 0:
                 optimizer.zero_grad()
-            loss.backward()
+            if args.amp_opt_level:
+                with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                loss.backward()
             if (batch_idx + 1) % args.accum_freq == 0:
                 if args.clip > 0:
                     # Compute and rescale gradient norm
