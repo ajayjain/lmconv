@@ -271,7 +271,7 @@ def sample_from_discretized_mix_logistic_1d(l, nr_mix):
     return out
 
 
-def sample_from_discretized_mix_logistic(l, nr_mix):
+def sample_from_discretized_mix_logistic(l, nr_mix, mixture_temperature=1.0, logistic_temperature=1.0):
     # Pytorch ordering
     l = l.permute(0, 2, 3, 1)
     ls = [int(y) for y in l.size()]
@@ -279,7 +279,7 @@ def sample_from_discretized_mix_logistic(l, nr_mix):
 
     # unpack parameters
     logit_probs = l[:, :, :, :nr_mix]
-    l = l[:, :, :, nr_mix:].contiguous().view(xs + [nr_mix * 3])
+    l = l[:, :, :, nr_mix:].contiguous().view(xs + [nr_mix * 3]) / mixture_temperature
     # sample mixture indicator from softmax
     temp = torch.FloatTensor(logit_probs.size())
     if l.is_cuda : temp = temp.cuda()
@@ -301,7 +301,7 @@ def sample_from_discretized_mix_logistic(l, nr_mix):
     if l.is_cuda : u = u.cuda()
     u.uniform_(1e-5, 1. - 1e-5)
     u = Variable(u)
-    x = means + torch.exp(log_scales) * (torch.log(u) - torch.log(1. - u))
+    x = means + torch.exp(log_scales) * logistic_temperature * (torch.log(u) - torch.log(1. - u))
     x0 = torch.clamp(torch.clamp(x[:, :, :, 0], min=-1.), max=1.)
     x1 = torch.clamp(torch.clamp(
        x[:, :, :, 1] + coeffs[:, :, :, 0] * x0, min=-1.), max=1.)
@@ -374,5 +374,5 @@ def load_part_of_model(path, model, optimizer=None):
 
             # TODO: load param_groups key?
 
-    return checkpoint["epoch"]
+    return checkpoint["epoch"], checkpoint.get("global_step", -1)
 
