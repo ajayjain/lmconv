@@ -358,7 +358,7 @@ if args.ours:
             #   RIGHT HALF INPAINTING: --base_order_transpose
             #   LEFT HALF INPAINTING: --base_order_transpose --base_order_reflect_cols
             if args.base_order_transpose:
-                base_generation_idx = transpose(base_generation_idx, obs)
+                base_generation_idx = transpose(base_generation_idx)
             if args.base_order_reflect_rows:
                 base_generation_idx = reflect_rows(base_generation_idx, obs)
             if args.base_order_reflect_cols:
