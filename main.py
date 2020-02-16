@@ -162,7 +162,7 @@ dataset_obs = {
     'celebahq': (3, args.celeba_size, args.celeba_size)
 }[args.dataset]
 input_channels = dataset_obs[0]
-data_loader_kwargs = {'num_workers':4, 'pin_memory':True, 'drop_last':True, 'batch_size':args.batch_size}
+data_loader_kwargs = {'num_workers':1, 'pin_memory':True, 'drop_last':True, 'batch_size':args.batch_size}
 if args.resize_sizes:
     if not args.resize_probs:
         args.resize_probs = [1. / len(args.resize_sizes)] * len(args.resize_sizes)
