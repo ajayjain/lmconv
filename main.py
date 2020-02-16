@@ -444,7 +444,7 @@ if args.load_params:
     # Load params
     checkpoint_epochs, checkpoint_step = load_part_of_model(load_params,
                                            model=model.module,
-                                           optimizer=None if not args.do_not_load_optimizer else optimizer)
+                                           optimizer=None if args.do_not_load_optimizer else optimizer)
     logger.info(f"Model parameters loaded from {load_params}, from after {checkpoint_epochs} training epochs")
 elif args.load_last_params:
     # Find the most recent checkpoint (highest epoch number).
