@@ -414,7 +414,7 @@ def sample_from_binary_logits(l, coord1, coord2):
     l = l[:, :, coord1, coord2]
     pixels = torch.distributions.categorical.Categorical(logits=l).sample()
     pixels = pixels * 2. - 1.
-    return pixels
+    return pixels.unsqueeze(1)
 
 
 #########################################################################################
