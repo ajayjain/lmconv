@@ -472,6 +472,7 @@ elif args.load_last_params:
         checkpoint_epochs = -1
         checkpoint_step = -1
 else:
+    checkpoint_epochs = -1
     checkpoint_step = -1
 
 

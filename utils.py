@@ -62,7 +62,7 @@ def average_loss(log_probs_fn, x, ls, *xargs):
     for l in ls:
         log_probs = log_probs_fn(x, l, *xargs)  # B x H x W x num_logistic_mix
         all_log_probs.append(log_probs)
-    all_log_probs = torch.cat(all_log_probs, dim=3) - np.log(len(ls))
+    all_log_probs = torch.cat(all_log_probs, dim=-1) - np.log(len(ls))
     return -torch.sum(log_sum_exp(all_log_probs))
 
 
@@ -248,7 +248,7 @@ def discretized_mix_logistic_loss_1d_averaged(x, ls):
 
 def _binarized_label(x):
     assert x.size(1) == 1
-    x = rescaling_inv(x)  # [0, 1] range
+    x = x * .5 + .5  # Scale from [-1, 1] to [0, 1] range
     x = binarize_torch(x)  # binarize image. Should be able to just cast,
                             # since x is either 0. or 1., but this could avoid float
                             # innacuracies from rescaling.
@@ -268,8 +268,7 @@ def _binarized_log_probs(x, l):
     """
     assert l.size(1) == 2
     x = _binarized_label(x)
-    log_probs = F.cross_entropy(l, x, reduce="none")
-    assert log_probs.shape == x.shape
+    log_probs = -F.cross_entropy(l, x, reduction="none")
     return log_probs
 
 
@@ -287,7 +286,7 @@ def binarized_loss(x, l):
     x = _binarized_label(x)
     # cross_entropy averages across the batch, so we multiply by batch size
     # to keep a similar loss scale as with grayscale MNIST
-    return F.cross_entropy(l, x, reduce="sum") * l.size(0)
+    return F.cross_entropy(l, x, reduction="sum")
 
 
 def binarized_loss_averaged(x, ls):
@@ -308,7 +307,7 @@ def binarize_np(images: np.ndarray):
 
 
 def binarize_torch(images):
-    rand = torch.uniform(size=images.shape)
+    rand = torch.rand(images.shape, device=images.device)
     return (rand < images).float()
 
 
