@@ -61,11 +61,12 @@ class OurPixelCNN(nn.Module):
     def __init__(self, nr_resnet=5, nr_filters=80, nr_logistic_mix=10,
                     resnet_nonlinearity='concat_elu', input_channels=3, kernel_size=(5,5),
                     max_dilation=2, weight_norm=True, feature_norm_op=None, dropout_prob=0.5, conv_bias=True,
-                    rematerialize=False):
+                    rematerialize=False, binarize=False):
         super(OurPixelCNN, self).__init__()
         assert resnet_nonlinearity == 'concat_elu'
         self.resnet_nonlinearity = lambda x : concat_elu(x)
         self.init_padding = None
+        self.binarize = binarize
 
         if weight_norm:
             conv_op_init = lambda cin, cout: wn(input_masked_conv2d(cin, cout, kernel_size=kernel_size, bias=conv_bias))
@@ -93,8 +94,11 @@ class OurPixelCNN(nn.Module):
         self.norm_ds = nn.ModuleList([feature_norm_op(nr_filters) for _ in range(2)]) if feature_norm_op else None
         self.norm_us = nn.ModuleList([feature_norm_op(nr_filters) for _ in range(2)]) if feature_norm_op else None
 
-        num_mix = 3 if input_channels == 1 else 10
-        self.nin_out = nin(nr_filters, num_mix * nr_logistic_mix)
+        if self.binarize:
+            self.nin_out = nin(nr_filters, 2)
+        else:
+            num_mix = 3 if input_channels == 1 else 10
+            self.nin_out = nin(nr_filters, num_mix * nr_logistic_mix)
 
     def forward(self, x, sample=False, mask_init=None, mask_undilated=None, mask_dilated=None):
         # similar as done in the tf repo. remake init_padding if input height or width change :  

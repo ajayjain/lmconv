@@ -30,6 +30,7 @@ parser.add_argument('-o', '--save_dir', type=str, default='models',
                     help='Location for parameter checkpoints and samples')
 parser.add_argument('-d', '--dataset', type=str,
                     default='cifar', help='Can be either cifar|mnist|celeba')
+parser.add_argument('--binarize', action='store_true')
 parser.add_argument('-p', '--print_every', type=int, default=20,
                     help='how many iterations between print statements')
 parser.add_argument('-t', '--save_interval', type=int, default=20,
@@ -130,8 +131,9 @@ np.random.seed(args.seed)
 if args.run_dir:
     run_dir = args.run_dir
 else:
+    dataset_name = args.dataset if not args.binarize else f"binary_{args.dataset}"
     _name = "{:05d}_{}_lr{:.5f}_bs{}_gc{}_k{}_md{}".format(
-        args.exp_id, args.dataset, args.lr, args.batch_size, args.clip, args.kernel_size, args.max_dilation)
+        args.exp_id, dataset_name, args.lr, args.batch_size, args.clip, args.kernel_size, args.max_dilation)
     if args.normalization != "none":
         _name = f"{_name}_{args.normalization}"
     if args.exp_name:
@@ -200,7 +202,10 @@ def random_resize_collate(batch, default_collate=torch.utils.data.dataloader.def
 # Create data loaders
 if 'mnist' in args.dataset :
     assert args.n_bits == 8
-    rescaling = lambda x : (x - .5) * 2.  # rescale [0, 1] images into [-1, 1] range
+    if args.binarize:
+        rescaling = lambda x : (binarize_torch(x) - .5) * 2.  # binarze and rescale [0, 1] images into [-1, 1] range
+    else:
+        rescaling = lambda x : (x - .5) * 2.  # rescale [0, 1] images into [-1, 1] range
     rescaling_inv = lambda x : .5 * x + .5
     ds_transforms = transforms.Compose([transforms.ToTensor(), rescaling])
 
@@ -290,14 +295,21 @@ else :
 if 'mnist' in args.dataset :
     # Losses for 1-channel images
     assert args.n_bits == 8
-    loss_op = discretized_mix_logistic_loss_1d
-    loss_op_averaged = discretized_mix_logistic_loss_1d_averaged
-    sample_op = lambda x : sample_from_discretized_mix_logistic_1d(x, args.nr_logistic_mix)
+    if args.binarize:
+        loss_op = binarized_loss
+        loss_op_averaged = binarized_loss_averaged
+        sample_op = sample_from_binary_logits
+    else:
+        loss_op = discretized_mix_logistic_loss_1d
+        loss_op_averaged = discretized_mix_logistic_loss_1d_averaged
+        sample_op = lambda x, i, j: sample_from_discretized_mix_logistic_1d(x, i, j, args.nr_logistic_mix)
 else:
     # Losses for 3-channel images
     loss_op = lambda x, l : discretized_mix_logistic_loss(x, l, n_bits=args.n_bits)
     loss_op_averaged = lambda x, ls : discretized_mix_logistic_loss_averaged(x, ls, n_bits=args.n_bits)
-    sample_op = lambda x : sample_from_discretized_mix_logistic(x, args.nr_logistic_mix, args.sample_mixture_temperature, args.sample_logistic_temperature)
+    sample_op = lambda x, i, j: sample_from_discretized_mix_logistic(x, i, j, args.nr_logistic_mix,
+                                                                              args.sample_mixture_temperature,
+                                                                              args.sample_logistic_temperature)
 
 
 # Construct model
@@ -329,7 +341,8 @@ if args.ours:
                 feature_norm_op=norm_op,
                 dropout_prob=args.dropout_prob,
                 conv_bias=(not args.no_bias),
-                rematerialize=args.rematerialize)
+                rematerialize=args.rematerialize,
+                binarize=args.binarize)
 
     all_generation_idx_by_obs = {}
     all_masks_by_obs = {}
@@ -412,6 +425,7 @@ optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_
 scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=args.lr_decay)
 
 if args.amp_opt_level:
+    # Enable mixed precision training
     from apex import amp
     model, optimizer = amp.initialize(model, optimizer, opt_level=args.amp_opt_level)
 
@@ -584,7 +598,7 @@ def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch
         t1 = time.time()
         out = model(data_v, sample=True, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
         t2 = time.time()
-        out_sample = sample_op(out).data[:, :, i, j]
+        out_sample = sample_op(out, i, j)
         logger.info("%d %d,%d Time to infer logits=%f s, sample=%f s", n_pix, i, j, t2-t1, time.time()-t2)
         data[:, :, i, j] = out_sample
         logger.info(f"Sampled pixel {i},{j}, with batchwise range {out_sample.min().item()}-{out_sample.max().item()} (mean {out_sample.mean().item()}), dtype={out_sample.dtype} {type(out_sample)}")
@@ -616,7 +630,7 @@ if args.mode == "train":
         time_ = time.time()
         model.train()
         for batch_idx, (input,_) in enumerate(tqdm.tqdm(train_loader, desc=f"Train epoch {epoch}", total=train_total)):
-            input = input.cuda(non_blocking=True)
+            input = input.cuda(non_blocking=True)  # [-1, 1] range images
 
             obs = input.shape[1:]
             all_masks = all_masks_by_obs[obs]

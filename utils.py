@@ -35,6 +35,10 @@ def concat_elu(x):
     return F.elu(torch.cat([x, -x], dim=axis), inplace=True)
 
 
+###########################
+# Shared loss utilities
+###########################
+
 def log_sum_exp(x):
     """ numerically stable log_sum_exp implementation that prevents overflow """
     # TF ordering
@@ -61,6 +65,10 @@ def average_loss(log_probs_fn, x, ls, *xargs):
     all_log_probs = torch.cat(all_log_probs, dim=3) - np.log(len(ls))
     return -torch.sum(log_sum_exp(all_log_probs))
 
+
+###########################
+# Multi-channel/color loss
+###########################
 
 def discretized_mix_logistic_log_probs(x, l, n_bits=8):
     """ log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval """
@@ -161,6 +169,10 @@ def discretized_mix_logistic_loss_averaged(x, ls, n_bits=8):
     return average_loss(discretized_mix_logistic_log_probs, x, ls, n_bits)
 
 
+###################
+# 1D (1 color) loss
+###################
+
 def discretized_mix_logistic_log_probs_1d(x, l):
     """ log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval """
     # Pytorch ordering
@@ -206,7 +218,7 @@ def discretized_mix_logistic_log_probs_1d(x, l):
     log_probs        = torch.sum(log_probs, dim=3) + log_prob_from_logits(logit_probs)
 
     return log_probs
- 
+
 
 def discretized_mix_logistic_loss_1d(x, l):
     """ reduced (summed) log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval
@@ -230,6 +242,80 @@ def discretized_mix_logistic_loss_1d_averaged(x, ls):
     return average_loss(discretized_mix_logistic_log_probs_1d, x, ls)
 
 
+######################################################
+# Binarization utilities and cross entropy losses
+######################################################
+
+def _binarized_label(x):
+    assert x.size(1) == 1
+    x = rescaling_inv(x)  # [0, 1] range
+    x = binarize_torch(x)  # binarize image. Should be able to just cast,
+                            # since x is either 0. or 1., but this could avoid float
+                            # innacuracies from rescaling.
+    x = x.squeeze(1).long()
+    return x
+
+
+def _binarized_log_probs(x, l):
+    """Cross-entropy loss
+
+    Args:
+        x: B x 1 x H x W floating point ground truth image, [-1, 1] scale
+        l: B x 2 x H x W output of neural network
+
+    Returns:
+        loss: B x H x W tensor
+    """
+    assert l.size(1) == 2
+    x = _binarized_label(x)
+    log_probs = F.cross_entropy(l, x, reduce="none")
+    assert log_probs.shape == x.shape
+    return log_probs
+
+
+def binarized_loss(x, l):
+    """Cross-entropy loss
+
+    Args:
+        x: B x 1 x H x W floating point ground truth image, [-1, 1] scale
+        l: B x 2 x H x W output of neural network
+
+    Returns:
+        loss: 0-dimensional NLL loss tensor
+    """
+    assert l.size(1) == 2
+    x = _binarized_label(x)
+    # cross_entropy averages across the batch, so we multiply by batch size
+    # to keep a similar loss scale as with grayscale MNIST
+    return F.cross_entropy(l, x, reduce="sum") * l.size(0)
+
+
+def binarized_loss_averaged(x, ls):
+    """
+    Args:
+        x: B x C x H x W ground truth image
+        ls: list of B x 2 x H x W outputs of NN
+
+    Returns:
+        loss: 0-dimensional NLL loss tensor
+    """
+    return average_loss(_binarized_log_probs, x, ls)
+
+
+def binarize_np(images: np.ndarray):
+    rand = np.random.uniform(size=images.shape)
+    return (rand < images).astype(np.float32)
+
+
+def binarize_torch(images):
+    rand = torch.uniform(size=images.shape)
+    return (rand < images).float()
+
+
+###########
+# Sampling
+###########
+
 def to_one_hot(tensor, n, fill_with=1.):
     # we perform one hot encore with respect to the last axis
     one_hot = torch.FloatTensor(tensor.size() + (n,)).zero_()
@@ -238,7 +324,7 @@ def to_one_hot(tensor, n, fill_with=1.):
     return Variable(one_hot)
 
 
-def sample_from_discretized_mix_logistic_1d(l, nr_mix):
+def sample_from_discretized_mix_logistic_1d(l, coord1, coord2, nr_mix):
     # Pytorch ordering
     l = l.permute(0, 2, 3, 1)
     ls = [int(y) for y in l.size()]
@@ -268,10 +354,10 @@ def sample_from_discretized_mix_logistic_1d(l, nr_mix):
     x = means + torch.exp(log_scales) * (torch.log(u) - torch.log(1. - u))
     x0 = torch.clamp(torch.clamp(x[:, :, :, 0], min=-1.), max=1.)
     out = x0.unsqueeze(1)
-    return out
+    return out.data[:, :, coord1, coord2]
 
 
-def sample_from_discretized_mix_logistic(l, nr_mix, mixture_temperature=1.0, logistic_temperature=1.0):
+def sample_from_discretized_mix_logistic(l, coord1, coord2, nr_mix, mixture_temperature=1.0, logistic_temperature=1.0):
     # Pytorch ordering
     l = l.permute(0, 2, 3, 1)
     ls = [int(y) for y in l.size()]
@@ -309,13 +395,33 @@ def sample_from_discretized_mix_logistic(l, nr_mix, mixture_temperature=1.0, log
        x[:, :, :, 2] + coeffs[:, :, :, 1] * x0 + coeffs[:, :, :, 2] * x1, min=-1.), max=1.)
 
     out = torch.cat([x0.view(xs[:-1] + [1]), x1.view(xs[:-1] + [1]), x2.view(xs[:-1] + [1])], dim=3)
+    return out.data[:, coord1, coord2, :]
     # put back in Pytorch ordering
-    out = out.permute(0, 3, 1, 2)
-    return out
+    # out = out.permute(0, 3, 1, 2)
+    # return out
 
 
+def sample_from_binary_logits(l, coord1, coord2):
+    """
+    Args:
+        l: B x 2 x H x W output of NN (logits)
+        coord1
+        coord2
 
-''' utilities for shifting the image around, efficient alternative to masking convolutions '''
+    Returns:
+        pixels: B x 1 pixel samples at location (coord1, coord2) in range [-1, 1]
+    """
+    assert l.size(1) == 2
+    l = l[:, :, coord1, coord2]
+    pixels = torch.distributions.categorical.Categorical(logits=l).sample()
+    pixels = pixels * 2. - 1.
+    return pixels
+
+
+#########################################################################################
+# utilities for shifting the image around, efficient alternative to masking convolutions
+#########################################################################################
+
 def down_shift(x, pad=None):
     # Pytorch ordering
     xs = [int(y) for y in x.size()]
@@ -335,6 +441,10 @@ def right_shift(x, pad=None):
     pad = nn.ZeroPad2d((1, 0, 0, 0)) if pad is None else pad
     return pad(x)
 
+
+#######################
+# Restoring checkpoint
+#######################
 
 def load_part_of_model(path, model, optimizer=None):
     checkpoint = torch.load(path)
