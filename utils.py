@@ -63,7 +63,8 @@ def average_loss(log_probs_fn, x, ls, *xargs):
         log_probs = log_probs_fn(x, l, *xargs)  # B x H x W x num_logistic_mix
         all_log_probs.append(log_probs)
     all_log_probs = torch.cat(all_log_probs, dim=-1) - np.log(len(ls))
-    return -torch.sum(log_sum_exp(all_log_probs))
+    loss = -torch.sum(log_sum_exp(all_log_probs))
+    return loss
 
 
 ###########################
@@ -260,15 +261,16 @@ def _binarized_log_probs(x, l):
     """Cross-entropy loss
 
     Args:
-        x: B x 1 x H x W floating point ground truth image, [-1, 1] scale
+        x: B x H x W floating point ground truth image, [-1, 1] scale
         l: B x 2 x H x W output of neural network
 
     Returns:
-        loss: B x H x W tensor
+        log_probs: B x H x W x 1 tensor of likelihod of each pixel in x
     """
     assert l.size(1) == 2
     x = _binarized_label(x)
-    log_probs = -F.cross_entropy(l, x, reduction="none")
+    l = F.log_softmax(l, dim=1)
+    log_probs = -F.nll_loss(l, x, reduction="none").unsqueeze(-1)
     return log_probs
 
 
