@@ -96,8 +96,9 @@ parser.add_argument('--order', type=str, nargs="+",
                     help="Autoregressive generation order")
 parser.add_argument('--randomize_order', action="store_true", help="Randomize between 8 variants of the "
                     "pixel generation order.")
-parser.add_argument('--mode', type=str, choices=["train", "sample", "test", "test_center_quarter", "test_top_half"],
+parser.add_argument('--mode', type=str, choices=["train", "sample", "test"],
                     default="train")
+# configure sampling
 parser.add_argument('--sample_region', type=str, choices=["full", "center", "random_near_center", "top", "custom"], default="full")
 parser.add_argument('--sample_size_h', type=int, default=16, help="Only used for --sample_region center, top or random. =H of inpainting region.")
 parser.add_argument('--sample_size_w', type=int, default=16, help="Only used for --sample_region center, top or random. =W of inpainting region.")
@@ -106,6 +107,14 @@ parser.add_argument('--sample_offset2', type=int, default=None, help="Manually s
 parser.add_argument('--sample_batch_size', type=int, default=25, help="Number of images to sample")
 parser.add_argument('--sample_mixture_temperature', type=float, default=1.0)
 parser.add_argument('--sample_logistic_temperature', type=float, default=1.0)
+# configure testing
+parser.add_argument('--test_region', type=str, choices=["full", "custom"], default="full")
+parser.add_argument('--test_minh', type=int, default=0, help="Specify conditional likelihood testing region. Only used with --test_region custom")
+parser.add_argument('--test_maxh', type=int, default=32, help="Specify conditional likelihood testing region. Only used with --test_region custom")
+parser.add_argument('--test_minw', type=int, default=0, help="Specify conditional likelihood testing region. Only used with --test_region custom")
+parser.add_argument('--test_maxw', type=int, default=32, help="Specify conditional likelihood testing region. Only used with --test_region custom")
+parser.add_argument('--order_variants', nargs="*", type=int)
+# our model
 parser.add_argument('--no_bias', action="store_true", help="Disable learnable bias for all convolutions")
 parser.add_argument('--minimize_bpd', action="store_true", help="Minimize bpd, scaling loss down by number of dimension")
 parser.add_argument('--resize_sizes', type=int, nargs="*")
@@ -147,7 +156,12 @@ wandb.init(project="autoreg_orders", id=f"{args.exp_id}_{args.mode}", name=f"{ru
 
 # Log arguments
 wandb.config.update(args)
-logger = configure_logger(os.path.join(run_dir, f"{args.mode}_{np.random.randint(1000)}.log"))
+timestamp = time.strftime("%Y%m%d-%H%M%S")
+if args.mode == "test" and args.test_region == "custom":
+    logfile = f"{args.mode}_{args.test_minh}:{args.test_maxh}_{args.test_minw}:{args.test_maxw}_{timestamp}.log"
+else:
+    logfile = f"{args.mode}_{timestamp}.log"
+logger = configure_logger(os.path.join(run_dir, logfile))
 logger.info("Run directory: %s", run_dir)
 logger.info("Arguments: %s", args)
 for k, v in vars(args).items():
@@ -368,6 +382,9 @@ if args.ours:
                 all_generation_idx.extend(augment_orders(base_generation_idx, obs))
             else:
                 all_generation_idx.append(base_generation_idx)
+        if args.order_variants:
+            print("Selecting order variants", args.order_variants)
+            all_generation_idx = [all_generation_idx[i] for i in args.order_variants]
 
         # Generate center square last for inpainting
         observed_idx = None
@@ -386,11 +403,17 @@ if args.ours:
         # Plot orders
         if args.mode == "sample":
             plot_orders_out_path = os.path.join(run_dir, f"{args.mode}_{args.sample_region}_{args.sample_size_h}x{args.sample_size_w}_o1{args.sample_offset1}_o2{args.sample_offset2}_orderings_obs{obs2str(obs)}.png")
+        elif args.mode == "test":
+            plot_orders_out_path = os.path.join(run_dir, f"{args.mode}_{args.test_region}_{args.test_minh}:{args.test_maxh}_{args.test_minw}:{args.test_maxw}_orderings_obs{obs2str(obs)}.png")
         else:
             plot_orders_out_path = os.path.join(run_dir, f"{args.mode}_orderings_obs{obs2str(obs)}.png")
-        plot_orders(all_generation_idx, obs, size=5, plot_rows=min(len(all_generation_idx), 4),
-                    out_path=plot_orders_out_path)
-        wandb.log({plot_orders_out_path: wandb.Image(plot_orders_out_path)})
+
+        try:
+            plot_orders(all_generation_idx, obs, size=5, plot_rows=min(len(all_generation_idx), 4),
+                        out_path=plot_orders_out_path)
+            wandb.log({plot_orders_out_path: wandb.Image(plot_orders_out_path)})
+        except IndexError as e:
+            logger.error("Failed to plot orders: %s", e)
 
         all_generation_idx_by_obs[obs] = all_generation_idx
 
@@ -501,6 +524,7 @@ def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True,
             output = model(input_var, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
             output = slice_op(output) if slice_op is not None else output
             outputs.append(output)
+        assert slice_op is not None  # FIXME: temporary check
         input_var_for_loss = slice_op(input_var) if slice_op is not None else input_var
         loss = loss_op_averaged(input_var_for_loss, outputs)
 
@@ -779,47 +803,25 @@ elif args.mode == "sample":
             sample_order_i = np.random.randint(len(all_masks))
             logger.info('sampling images with observation %s, ordering variant %d...', obs2str(obs), sample_order_i)
             sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i], batch_to_complete, obs)
-            sample_save_path = os.path.join(run_dir, f'{args.mode}_{args.sample_region}_{args.sample_size_h}x{args.sample_size_w}_o1{args.sample_offset1}_o2{args.sample_offset2}_obs{obs2str(obs)}_ep{checkpoint_epochs}_order{sample_order_i}.png')
+            sample_save_path = os.path.join(run_dir, f'{args.mode}_{args.sample_region}_ep{checkpoint_epochs}_{args.sample_size_h}x{args.sample_size_w}_o1{args.sample_offset1}_o2{args.sample_offset2}_obs{obs2str(obs)}_order{sample_order_i}_ltemp{args.sample_logistic_temperature}_mtemp{args.sample_mixture_temperature}.png')
             utils.save_image(sample_t, sample_save_path,
                              nrow=4, padding=5, pad_value=1, scale_each=False)
             wandb.log({sample_save_path: wandb.Image(sample_save_path), "epoch": checkpoint_epochs})
-elif args.mode.startswith("test"):
-    if args.mode == "test_center_quarter":
-        def slice_op(x):
-            """Take a subset of pixels from x for computing loss.
-            
-            Args:
-                x: B x C x H x W image / tensor
-
-            Returns:
-                y: B x C x H' x W' image / tensor
-            """
-            H, W = x.shape[2], x.shape[3]
-            minh = H // 4
-            maxh = H - (H // 4)
-            minw = W // 4
-            maxw = W - (W // 4)
-            y = x[:, :, minh:maxh, minw:maxw]
-            assert y.shape[2] == H // 2
-            assert y.shape[3] == W // 2
-            return y
-        sliced_obs = (obs[0], obs[1] // 2, obs[2] // 2)
-    elif args.mode == "test_top_half":
-        def slice_op(x):
-            # Take top half of image / logits
-            H, W = x.shape[2], x.shape[3]
-            minh = 0
-            maxh = H // 2
-            minw = 0
-            maxw = W
-            y = x[:, :, minh:maxh, minw:maxw]
-            assert y.shape[2] == H // 2
-            assert y.shape[3] == W
-            return y
-        sliced_obs = (obs[0], obs[1] // 2, obs[2])
-    else:
+elif args.mode == "test":
+    if args.test_region == "full":
         slice_op = lambda x: x
         sliced_obs = obs
+        region_str = f"full"
+    else:
+        def slice_op(x):
+            # Take section of logits
+            H, W = x.shape[2], x.shape[3]
+            y = x[:, :, args.test_minh:args.test_maxh, args.test_minw:args.test_maxw]
+            assert y.shape[2] == args.test_maxh - args.test_minh
+            assert y.shape[3] == args.test_maxw - args.test_minw
+            return y
+        sliced_obs = (obs[0], args.test_maxh - args.test_minh, args.test_maxh - args.test_minh)
+        region_str = f"{args.test_minh}:{args.test_maxh}_{args.test_minw}:{args.test_maxw}"
 
     model.eval()
     with torch.no_grad():
@@ -832,5 +834,5 @@ elif args.mode.startswith("test"):
                             progress_bar=True,
                             slice_op=slice_op,
                             sliced_obs=sliced_obs)
-            logger.info(f"test loss with mode {args.mode}, randomize {args.randomize_order} for obs {obs2str(obs)}, sliced obs {obs2str(sliced_obs)}: %s bpd" % test_bpd)
-
+            test_nats = test_bpd * np.log(2) * np.prod(obs)
+            logger.info(f"!!test loss with mode {args.mode}, randomize {args.randomize_order} for obs {obs2str(obs)}, sliced obs {obs2str(sliced_obs)}, region {region_str}: %s bpd = %s nats" % (test_bpd, test_nats))
