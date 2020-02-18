@@ -820,7 +820,7 @@ elif args.mode == "test":
             assert y.shape[2] == args.test_maxh - args.test_minh
             assert y.shape[3] == args.test_maxw - args.test_minw
             return y
-        sliced_obs = (obs[0], args.test_maxh - args.test_minh, args.test_maxh - args.test_minh)
+        sliced_obs = (obs[0], args.test_maxh - args.test_minh, args.test_maxw - args.test_minw)
         region_str = f"{args.test_minh}:{args.test_maxh}_{args.test_minw}:{args.test_maxw}"
 
     model.eval()
@@ -834,5 +834,5 @@ elif args.mode == "test":
                             progress_bar=True,
                             slice_op=slice_op,
                             sliced_obs=sliced_obs)
-            test_nats = test_bpd * np.log(2) * np.prod(obs)
+            test_nats = test_bpd * np.log(2) * np.prod(sliced_obs)
             logger.info(f"!!test loss with mode {args.mode}, randomize {args.randomize_order} for obs {obs2str(obs)}, sliced obs {obs2str(sliced_obs)}, region {region_str}: %s bpd = %s nats" % (test_bpd, test_nats))
