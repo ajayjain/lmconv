@@ -510,9 +510,6 @@ def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True,
         deno = num_images * np.prod(sliced_obs) * np.log(2.)
         pbar.set_description(f"Test after epoch {epoch} {test_loss / deno}")
 
-    # FIXME: for final evaluation, don't use batch_idx * args.batch_size -- this slightly overestimates
-    # the number of dims (10016 * prod(obs) * log(2) for mnist) since the last iteration might have fewer than
-    # args.batch_size images. Leaving this code the same for now to allow comparison between training runs.
     deno = num_images * np.prod(sliced_obs) * np.log(2.)
     assert deno > 0, embed()
     test_bpd = test_loss / deno
