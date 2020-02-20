@@ -97,7 +97,7 @@ def average_loss(log_probs_fn, x, ls, *xargs):
     return loss
 
 
-"""
+'''
 sampled_conditional_idx = {
     ("cifar", "s_curve"): np.load("/work/ajayj/conditionals/cifar_s_curve_grouped_conditional_idx.npy", allow_pickle=True).item(),
 }
@@ -151,7 +151,7 @@ def average_loss(log_probs_fn, x, ls, *xargs):
     log_prob = log_sum_exp(batchwise_log_probs + log_weights.unsqueeze(0))
     # log_prob = log_sum_exp(batchwise_log_probs) - float(np.log(K))
     return -torch.sum(log_prob)
-"""
+'''
 
 
 ###########################
