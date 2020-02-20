@@ -107,6 +107,8 @@ parser.add_argument('--sample_offset2', type=int, default=None, help="Manually s
 parser.add_argument('--sample_batch_size', type=int, default=25, help="Number of images to sample")
 parser.add_argument('--sample_mixture_temperature', type=float, default=1.0)
 parser.add_argument('--sample_logistic_temperature', type=float, default=1.0)
+parser.add_argument('--save_nrow', type=int, default=4)
+parser.add_argument('--save_padding', type=int, default=2)
 # configure testing
 parser.add_argument('--test_region', type=str, choices=["full", "custom"], default="full")
 parser.add_argument('--test_minh', type=int, default=0, help="Specify conditional likelihood testing region. Only used with --test_region custom")
@@ -805,7 +807,7 @@ elif args.mode == "sample":
             sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i], batch_to_complete, obs)
             sample_save_path = os.path.join(run_dir, f'{args.mode}_{args.sample_region}_ep{checkpoint_epochs}_{args.sample_size_h}x{args.sample_size_w}_o1{args.sample_offset1}_o2{args.sample_offset2}_obs{obs2str(obs)}_order{sample_order_i}_ltemp{args.sample_logistic_temperature}_mtemp{args.sample_mixture_temperature}.png')
             utils.save_image(sample_t, sample_save_path,
-                             nrow=4, padding=5, pad_value=1, scale_each=False)
+                             nrow=args.save_nrow, padding=args.save_padding, pad_value=1, scale_each=False)
             wandb.log({sample_save_path: wandb.Image(sample_save_path), "epoch": checkpoint_epochs})
 elif args.mode == "test":
     if args.test_region == "full":
