@@ -82,21 +82,22 @@ def log_prob_from_logits(x):
 #     return loss
 
 
-# def average_loss(log_probs_fn, x, ls, *xargs):
-#     """ ensemble multiple nn outputs (ls) by averaging likelihood """
-#     # Correct but limited, ensembles at the level of the joint
-#     all_log_probs = []
-#     for l in ls:
-#         log_probs = log_probs_fn(x, l, *xargs)  # B x H x W x num_logistic_mix
-#         log_prob = log_sum_exp(log_probs)  # B x H x W
-#         log_prob = torch.sum(log_prob, dim=(1, 2))  # B, log prob of image under this
-#                                                     # ensemble component
-#         all_log_probs.append(log_prob)
-#     all_log_probs = torch.stack(all_log_probs, dim=1) - np.log(len(ls))  # B x len(ls)
-#     loss = -torch.sum(log_sum_exp(all_log_probs))
-#     return loss
+def average_loss(log_probs_fn, x, ls, *xargs):
+    """ ensemble multiple nn outputs (ls) by averaging likelihood """
+    # Correct but limited, ensembles at the level of the joint
+    all_log_probs = []
+    for l in ls:
+        log_probs = log_probs_fn(x, l, *xargs)  # B x H x W x num_logistic_mix
+        log_prob = log_sum_exp(log_probs)  # B x H x W
+        log_prob = torch.sum(log_prob, dim=(1, 2))  # B, log prob of image under this
+                                                    # ensemble component
+        all_log_probs.append(log_prob)
+    all_log_probs = torch.stack(all_log_probs, dim=1) - np.log(len(ls))  # B x len(ls)
+    loss = -torch.sum(log_sum_exp(all_log_probs))
+    return loss
 
 
+"""
 sampled_conditional_idx = {
     ("cifar", "s_curve"): np.load("/work/ajayj/conditionals/cifar_s_curve_grouped_conditional_idx.npy", allow_pickle=True).item(),
 }
@@ -150,6 +151,7 @@ def average_loss(log_probs_fn, x, ls, *xargs):
     log_prob = log_sum_exp(batchwise_log_probs + log_weights.unsqueeze(0))
     # log_prob = log_sum_exp(batchwise_log_probs) - float(np.log(K))
     return -torch.sum(log_prob)
+"""
 
 
 ###########################
