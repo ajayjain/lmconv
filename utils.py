@@ -129,7 +129,13 @@ def average_loss(log_probs_fn, x, ls, *xargs):
     # weights = weights / torch.sum(weights)
     # log_weights = torch.log(weights)
     # Option 2: Log softmax weights
-    log_weights = F.log_softmax(weights)
+    log_weights = F.log_softmax(weights / 10000)
+
+    # print("weights", list(weights.cpu().numpy()))
+    # print("log_weights", list(log_weights.cpu().numpy()))
+    # print("exp log weights", list(torch.exp(log_weights).cpu().numpy()))
+    # import sys
+    # sys.exit()
 
     # Aggregate over ensemble
     for conditional_idx in all_conditional_idx:
