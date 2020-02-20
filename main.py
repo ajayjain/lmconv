@@ -524,7 +524,11 @@ def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True,
             output = model(input_var, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
             output = slice_op(output) if slice_op is not None else output
             outputs.append(output)
-        assert slice_op is not None  # FIXME: temporary check
+
+        # assert slice_op is not None  # FIXME: temporary check for whole image testing
+        order_prefix = "_".join(args.order)
+        np.save(f"{args.dataset}_{order_prefix}_all_generation_idx", all_generation_idx)
+
         input_var_for_loss = slice_op(input_var) if slice_op is not None else input_var
         loss = loss_op_averaged(input_var_for_loss, outputs)
 
