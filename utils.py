@@ -56,13 +56,43 @@ def log_prob_from_logits(x):
     return x - m - torch.log(torch.sum(torch.exp(x - m), dim=axis, keepdim=True))
 
 
+# def average_loss(log_probs_fn, x, ls, *xargs):
+#     """ ensemble multiple nn outputs (ls) by averaging likelihood """
+#     # NOTE: Incorrect ensembling technique, gets 2.7 bpd
+#     all_log_probs = []
+#     for l in ls:
+#         log_probs = log_probs_fn(x, l, *xargs)  # B x H x W x num_logistic_mix
+#         all_log_probs.append(log_probs)
+    
+#     # DEBUG: save log probs for each ensemble component
+#     stacked = torch.stack(all_log_probs, dim=4)
+#     stacked = stacked.cpu().numpy()
+#     # np.save("/home/ajay/gen/pixel-cnn-pp/cifar_ensemble_log_probs_to_average.npy", {
+#     #     "log_probs": stacked,
+#     #     "ls": [l.cpu().numpy() for l in ls],
+#     #     "x": x.cpu().numpy()
+#     # })
+#     print("SAVED ENSEMBLE LOG PROBS")
+#     import sys
+
+#     all_log_probs = torch.cat(all_log_probs, dim=-1) - np.log(len(ls))
+#     loss = -torch.sum(log_sum_exp(all_log_probs))
+#     print(loss, loss / (3 * 32 * 32 * 32))
+#     sys.exit()
+#     return loss
+
+
 def average_loss(log_probs_fn, x, ls, *xargs):
     """ ensemble multiple nn outputs (ls) by averaging likelihood """
+    # Correct but limited, ensembles at the level of the joint
     all_log_probs = []
     for l in ls:
         log_probs = log_probs_fn(x, l, *xargs)  # B x H x W x num_logistic_mix
-        all_log_probs.append(log_probs)
-    all_log_probs = torch.cat(all_log_probs, dim=-1) - np.log(len(ls))
+        log_prob = log_sum_exp(log_probs)  # B x H x W
+        log_prob = torch.sum(log_prob, dim=(1, 2))  # B, log prob of image under this
+                                                    # ensemble component
+        all_log_probs.append(log_prob)
+    all_log_probs = torch.stack(all_log_probs, dim=1) - np.log(len(ls))  # B x len(ls)
     loss = -torch.sum(log_sum_exp(all_log_probs))
     return loss
 
