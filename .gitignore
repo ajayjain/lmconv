@@ -9,3 +9,4 @@ scratch/
 *.png
 *-checkpoint.ipynb
 *.ipynb
+*.pth

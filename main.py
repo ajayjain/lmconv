@@ -107,6 +107,7 @@ parser.add_argument('--sample_offset2', type=int, default=None, help="Manually s
 parser.add_argument('--sample_batch_size', type=int, default=25, help="Number of images to sample")
 parser.add_argument('--sample_mixture_temperature', type=float, default=1.0)
 parser.add_argument('--sample_logistic_temperature', type=float, default=1.0)
+parser.add_argument('--sample_quantize', action="store_true", help="Quantize images during sampling to avoid train-sample distribution shift")
 parser.add_argument('--save_nrow', type=int, default=4)
 parser.add_argument('--save_padding', type=int, default=2)
 # configure testing
@@ -305,6 +306,16 @@ elif 'celebahq' in args.dataset :
     test_total = 3000 // args.batch_size if args.max_celeba_test_batches <= 0 else args.max_celeba_test_batches
 else :
     raise Exception('{} dataset not in {mnist, cifar10}'.format(args.dataset))
+
+
+def quantize(x):
+    # Quantize [-1, 1] images to uint8 range, then put back in [-1, 1]
+    # Can be used during sampling with --sample_quantize argument
+    assert args.n_bits == 8
+    continuous_x = rescaling_inv(x) * 255  # Scale to [0, 255] range
+    discrete_x = continuous_x.long().float()  # Round down
+    quantized_x = discrete_x / 255.
+    return rescaling(quantized_x)
 
 
 # Select loss functions
@@ -627,12 +638,14 @@ def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch
         out = model(data_v, sample=True, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
         t2 = time.time()
         out_sample = sample_op(out, i, j)
+        if args.sample_quantize:
+            out_sample = quantize(out_sample)
         logger.info("%d %d,%d Time to infer logits=%f s, sample=%f s", n_pix, i, j, t2-t1, time.time()-t2)
         data[:, :, i, j] = out_sample
         logger.info(f"Sampled pixel {i},{j}, with batchwise range {out_sample.min().item()}-{out_sample.max().item()} (mean {out_sample.mean().item()}), dtype={out_sample.dtype} {type(out_sample)}")
 
         if (n_pix <= 256 and n_pix % 32 == 0) or n_pix % 256 == 0:
-            sample_save_path = os.path.join(run_dir, f'{args.mode}_{args.sample_region}_{args.sample_size_h}x{args.sample_size_w}_o1{args.sample_offset1}_o2{args.sample_offset2}_obs{obs2str(obs)}_ep{checkpoint_epochs}_order{sample_order_i}_{n_pix}of{len(sample_idx)}pix.png')
+            sample_save_path = os.path.join(run_dir, f'{args.mode}_{args.sample_region}_{args.sample_size_h}x{args.sample_size_w}_o1{args.sample_offset1}_o2{args.sample_offset2}_obs{obs2str(obs)}_ep{checkpoint_epochs}_order{sample_order_i}_{n_pix}of{len(sample_idx)}pix{"_quantize" if args.sample_quantize else ""}.png')
             utils.save_image(rescaling_inv(data), sample_save_path, nrow=4, padding=5, pad_value=1, scale_each=False)
             wandb.log({sample_save_path: wandb.Image(sample_save_path)}, step=n_pix)
     data = rescaling_inv(data).cpu()
@@ -809,7 +822,7 @@ elif args.mode == "sample":
             sample_order_i = np.random.randint(len(all_masks))
             logger.info('sampling images with observation %s, ordering variant %d...', obs2str(obs), sample_order_i)
             sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i], batch_to_complete, obs)
-            sample_save_path = os.path.join(run_dir, f'{args.mode}_{args.sample_region}_ep{checkpoint_epochs}_{args.sample_size_h}x{args.sample_size_w}_o1{args.sample_offset1}_o2{args.sample_offset2}_obs{obs2str(obs)}_order{sample_order_i}_ltemp{args.sample_logistic_temperature}_mtemp{args.sample_mixture_temperature}.png')
+            sample_save_path = os.path.join(run_dir, f'{args.mode}_{args.sample_region}_ep{checkpoint_epochs}_{args.sample_size_h}x{args.sample_size_w}_o1{args.sample_offset1}_o2{args.sample_offset2}_obs{obs2str(obs)}_order{sample_order_i}_ltemp{args.sample_logistic_temperature}_mtemp{args.sample_mixture_temperature}{"_quantize" if args.sample_quantize else ""}.png')
             utils.save_image(sample_t, sample_save_path,
                              nrow=args.save_nrow, padding=args.save_padding, pad_value=1, scale_each=False)
             wandb.log({sample_save_path: wandb.Image(sample_save_path), "epoch": checkpoint_epochs})
