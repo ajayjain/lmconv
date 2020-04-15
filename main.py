@@ -96,7 +96,7 @@ parser.add_argument('--order', type=str, nargs="+",
                     help="Autoregressive generation order")
 parser.add_argument('--randomize_order', action="store_true", help="Randomize between 8 variants of the "
                     "pixel generation order.")
-parser.add_argument('--mode', type=str, choices=["train", "sample", "test"],
+parser.add_argument('--mode', type=str, choices=["train", "sample", "test", "count_params"],
                     default="train")
 # configure sampling
 parser.add_argument('--sample_region', type=str, choices=["full", "center", "random_near_center", "top", "custom"], default="full")
@@ -857,3 +857,16 @@ elif args.mode == "test":
                             sliced_obs=sliced_obs)
             test_nats = test_bpd * np.log(2) * np.prod(sliced_obs)
             logger.info(f"!!test loss with mode {args.mode}, randomize {args.randomize_order} for obs {obs2str(obs)}, sliced obs {obs2str(sliced_obs)}, region {region_str}: %s bpd = %s nats" % (test_bpd, test_nats))
+elif args.mode == "count_params":
+    model.train()
+
+    print("Counting total number of parameters in model..")
+    num_params = 0
+    num_trainable_params = 0
+    for param in model.parameters():
+        num_params += np.prod(param.size())
+        if param.requires_grad:
+            num_trainable_params += np.prod(param.size())
+    print("  Total number of parameters in model:", num_params)
+    print("  Total number of trainable parameters in model:", num_trainable_params)
+
