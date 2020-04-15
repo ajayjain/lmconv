@@ -256,7 +256,7 @@ class _input_masked_conv2d(torch.autograd.Function):
             x = x + bias.unsqueeze(0).unsqueeze(2)
 
         # Step 4: Apply weight on mask, if provided. Equivalent to concatenating x and mask.
-        if mask_weight:
+        if mask_weight is not None:
             x = x + mask_weight.view(out_channels, -1).matmul(mask)
 
         # Step 4: Restore shape
@@ -297,8 +297,7 @@ class _input_masked_conv2d(torch.autograd.Function):
             grad_weight = grad_output_unfolded.matmul(x_.transpose(2, 1))
             grad_weight = grad_weight.view(grad_weight.size(0), *weight.shape)
         if ctx.needs_input_grad[3]:
-            assert mask.shape == (k1*k2, ctx.H*ctx.W)
-            grad_mask_weight = grad_output_unfolded.matmul(mask.transpose(1, 0))  # B x C_out x k1*k2
+            grad_mask_weight = grad_output_unfolded.matmul(mask.transpose(2, 1))  # B x C_out x k1*k2
             grad_mask_weight = grad_mask_weight.view(grad_mask_weight.size(0), *mask_weight.shape)
         if ctx.needs_input_grad[4]:
             grad_bias = grad_output.sum(dim=(0, 2, 3))
