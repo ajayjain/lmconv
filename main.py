@@ -119,6 +119,7 @@ parser.add_argument('--test_maxw', type=int, default=32, help="Specify condition
 parser.add_argument('--order_variants', nargs="*", type=int)
 # our model
 parser.add_argument('--no_bias', action="store_true", help="Disable learnable bias for all convolutions")
+parser.add_argument('--learn_weight_for_masks', action="store_true", help="Condition each masked conv on the mask itself, with a learned weight")
 parser.add_argument('--minimize_bpd', action="store_true", help="Minimize bpd, scaling loss down by number of dimension")
 parser.add_argument('--resize_sizes', type=int, nargs="*")
 parser.add_argument('--resize_probs', type=float, nargs="*")
@@ -368,6 +369,7 @@ if args.ours:
                 feature_norm_op=norm_op,
                 dropout_prob=args.dropout_prob,
                 conv_bias=(not args.no_bias),
+                conv_mask_weight=args.learn_weight_for_masks,
                 rematerialize=args.rematerialize,
                 binarize=args.binarize)
 

@@ -225,9 +225,9 @@ class masked_conv2d(nn.Module):
 
 class _input_masked_conv2d(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x, mask, weight, bias=None, dilation=1, padding=1):
+    def forward(ctx, x, mask, weight, mask_weight=None, bias=None, dilation=1, padding=1):
         assert len(x.shape) == 4, "Unfold/fold only support 4D batched image-like tensors"
-        ctx.save_for_backward(x, mask, weight)
+        ctx.save_for_backward(x, mask, weight, mask_weight)
         ctx.dilation = dilation
         ctx.padding = padding
         ctx.H, ctx.W = x.size(2), x.size(3)
@@ -255,20 +255,24 @@ class _input_masked_conv2d(torch.autograd.Function):
         if bias is not None:
             x = x + bias.unsqueeze(0).unsqueeze(2)
 
+        # Step 4: Apply weight on mask, if provided. Equivalent to concatenating x and mask.
+        if mask_weight:
+            x = x + mask_weight.view(out_channels, -1).matmul(mask)
+
         # Step 4: Restore shape
         output = x.view(x.size(0), x.size(1), *ctx.output_shape)
         return output
 
     @staticmethod
     def backward(ctx, grad_output):
-        x, mask, weight = ctx.saved_tensors
+        x, mask, weight, mask_weight = ctx.saved_tensors
         out_channels, in_channels, k1, k2 = weight.shape
         grad_output_unfolded = grad_output.view(grad_output.size(0),
                                                 grad_output.size(1),
                                                 -1)  # B x C_out x (H*W)
 
         # Compute gradients
-        grad_x = grad_weight = grad_bias = None
+        grad_x = grad_weight = grad_mask_weight = grad_bias = None
         if ctx.needs_input_grad[0]:
             weight_ = weight.view(out_channels, -1)
             grad_x_ = weight_.transpose(0, 1).matmul(grad_output_unfolded)
@@ -293,15 +297,19 @@ class _input_masked_conv2d(torch.autograd.Function):
             grad_weight = grad_output_unfolded.matmul(x_.transpose(2, 1))
             grad_weight = grad_weight.view(grad_weight.size(0), *weight.shape)
         if ctx.needs_input_grad[3]:
+            assert mask.shape == (k1*k2, ctx.H*ctx.W)
+            grad_mask_weight = grad_output_unfolded.matmul(mask.transpose(1, 0))  # B x C_out x k1*k2
+            grad_mask_weight = grad_mask_weight.view(grad_mask_weight.size(0), *mask_weight.shape)
+        if ctx.needs_input_grad[4]:
             grad_bias = grad_output.sum(dim=(0, 2, 3))
 
         assert not ctx.needs_input_grad[1], "Can't differentiate wrt mask"
 
-        return grad_x, None, grad_weight, grad_bias, None, None
+        return grad_x, None, grad_weight, grad_mask_weight, grad_bias, None, None
 
 
 class input_masked_conv2d(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=(3,3), dilation=1, bias=True):
+    def __init__(self, in_channels, out_channels, kernel_size=(3,3), dilation=1, bias=True, mask_weight=False):
         super(input_masked_conv2d, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -314,20 +322,23 @@ class input_masked_conv2d(nn.Module):
 
         # Conv parameters
         self.weight = Parameter(torch.Tensor(out_channels, in_channels, *kernel_size))
+        self.mask_weight = Parameter(torch.Tensor(out_channels, *kernel_size)) if mask_weight else None
         self.bias = Parameter(torch.Tensor(out_channels)) if bias else None
 
         self.reset_parameters()
 
     def reset_parameters(self):
-        # From PyTorch _ConvNd implementation
+        # Adapted from PyTorch _ConvNd implementation
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.mask_weight is not None:
+            nn.init.kaiming_uniform_(self.mask_weight, a=math.sqrt(5))
         if self.bias is not None:
             fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
             bound = 1 / math.sqrt(fan_in)
             nn.init.uniform_(self.bias, -bound, bound)
 
     def forward(self, x, mask=None):
-        return _input_masked_conv2d.apply(x, mask, self.weight, self.bias,
+        return _input_masked_conv2d.apply(x, mask, self.weight, self.mask_weight, self.bias,
                                           self.dilation, self.padding)
 
 
