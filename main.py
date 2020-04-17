@@ -131,6 +131,7 @@ parser.add_argument('--rematerialize', action="store_true", help="Recompute some
 parser.add_argument('--amp_opt_level', type=str, default=None)
 # plotting
 parser.add_argument('--plot_masks', action="store_true")
+parser.add_argument('--disable_wandb', action="store_true")
 
 args = parser.parse_args()
 # assert args.normalization != "weight_norm", "Weight normalization manually disabled in layers.py"
@@ -156,10 +157,11 @@ else:
         os.makedirs(run_dir, exist_ok=args.load_last_params)
 assert os.path.exists(run_dir), "Did not find run directory, check --run_dir argument"
 
-wandb.init(project="autoreg_orders", id=f"{args.exp_id}_{args.mode}", name=f"{run_dir}_{args.mode}", job_type=args.mode)
+if not args.disable_wandb:
+    wandb.init(project="autoreg_orders", id=f"{args.exp_id}_{args.mode}", name=f"{run_dir}_{args.mode}", job_type=args.mode)
+    wandb.config.update(args)
 
 # Log arguments
-wandb.config.update(args)
 timestamp = time.strftime("%Y%m%d-%H%M%S")
 if args.mode == "test" and args.test_region == "custom":
     logfile = f"{args.mode}_{args.test_minh}:{args.test_maxh}_{args.test_minw}:{args.test_maxw}_{timestamp}.log"
@@ -426,7 +428,8 @@ if args.ours:
         try:
             plot_orders(all_generation_idx, obs, size=5, plot_rows=min(len(all_generation_idx), 4),
                         out_path=plot_orders_out_path)
-            wandb.log({plot_orders_out_path: wandb.Image(plot_orders_out_path)})
+            if not args.disable_wandb:
+                wandb.log({plot_orders_out_path: wandb.Image(plot_orders_out_path)})
         except IndexError as e:
             logger.error("Failed to plot orders: %s", e)
 
@@ -468,7 +471,8 @@ if args.amp_opt_level:
     model, optimizer = amp.initialize(model, optimizer, opt_level=args.amp_opt_level)
 
 model = nn.DataParallel(model)
-wandb.watch(model)
+if not args.disable_wandb:
+    wandb.watch(model)
 
 
 
