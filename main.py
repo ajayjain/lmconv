@@ -98,6 +98,8 @@ parser.add_argument('--randomize_order', action="store_true", help="Randomize be
                     "pixel generation order.")
 parser.add_argument('--mode', type=str, choices=["train", "sample", "test", "count_params"],
                     default="train")
+# configure training
+parser.add_argument('--train_masks', nargs="*", type=int, help="Specify indices of masks in all_masks to use during training")
 # configure sampling
 parser.add_argument('--sample_region', type=str, choices=["full", "center", "random_near_center", "top", "custom"], default="full")
 parser.add_argument('--sample_size_h', type=int, default=16, help="Only used for --sample_region center, top or random. =H of inpainting region.")
@@ -111,6 +113,7 @@ parser.add_argument('--sample_quantize', action="store_true", help="Quantize ima
 parser.add_argument('--save_nrow', type=int, default=4)
 parser.add_argument('--save_padding', type=int, default=2)
 # configure testing
+parser.add_argument('--test_masks', nargs="*", type=int, help="Specify indices of masks in all_masks to use during testing")
 parser.add_argument('--test_region', type=str, choices=["full", "custom"], default="full")
 parser.add_argument('--test_minh', type=int, default=0, help="Specify conditional likelihood testing region. Only used with --test_region custom")
 parser.add_argument('--test_maxh', type=int, default=32, help="Specify conditional likelihood testing region. Only used with --test_region custom")
@@ -224,9 +227,11 @@ if 'mnist' in args.dataset :
     assert args.n_bits == 8
     if args.binarize:
         rescaling = lambda x : (binarize_torch(x) - .5) * 2.  # binarze and rescale [0, 1] images into [-1, 1] range
+        #rescaling = lambda x : binarize_torch(x)  # binarze [0, 1] images NOTE: temporary for rebuttal
     else:
         rescaling = lambda x : (x - .5) * 2.  # rescale [0, 1] images into [-1, 1] range
     rescaling_inv = lambda x : .5 * x + .5
+    #rescaling_inv = lambda x : x  # NOTE: temporary for rebuttal
     ds_transforms = transforms.Compose([transforms.ToTensor(), rescaling])
 
     train_loader = torch.utils.data.DataLoader(datasets.MNIST(args.data_dir, download=True,
@@ -681,7 +686,7 @@ if args.mode == "train":
 
             obs = input.shape[1:]
             all_masks = all_masks_by_obs[obs]
-            order_i = np.random.randint(len(all_masks))
+            order_i = np.random.choice(args.train_masks) if args.train_masks else np.random.randint(len(all_masks))
             mask_init, mask_undilated, mask_dilated = all_masks[order_i]
             output = model(input, mask_init=mask_init, mask_undilated=mask_undilated, mask_dilated=mask_dilated)
 
@@ -751,9 +756,10 @@ if args.mode == "train":
 
             if (epoch + 1) % args.test_interval == 0:
                 for obs in resized_obses:
+                    # test with all masks
                     logger.info(f"testing with obs {obs2str(obs)}...")
                     test_bpd = test(model,
-                                    all_masks_by_obs[obs],
+                                    [all_masks_by_obs[obs][i] for i in args.train_masks] if args.train_masks else all_masks_by_obs[obs],
                                     test_loader_by_obs[obs],
                                     epoch,
                                     progress_bar=True)
@@ -761,6 +767,17 @@ if args.mode == "train":
                     wandb.log({f'test/bpd_{obs2str(obs)}': test_bpd, "epoch": epoch}, step=global_step)
                     logger.info(f"test loss for obs {obs2str(obs)}: %s bpd" % test_bpd)
                     save_dict[f"test_loss_{obs2str(obs)}"] = test_bpd
+
+                    if args.test_masks:
+                        # test with held-out masks, e.g. to test generalization to other orders
+                        test_limit_bpd = test(model,
+                                        [all_masks_by_obs[obs][i] for i in args.test_masks],
+                                        test_loader_by_obs[obs],
+                                        epoch,
+                                        progress_bar=True)
+                        writer.add_scalar(f'test_limit/bpd_{obs2str(obs)}', test_limit_bpd, global_step)
+                        wandb.log({f'test_limit/bpd_{obs2str(obs)}': test_limit_bpd, "epoch": epoch}, step=global_step)
+                        logger.info(f"test with args.test_masks={args.test_masks} loss for obs {obs2str(obs)}: %s bpd" % test_limit_bpd)
 
                     # Log min test bpd for smoothness
                     min_test_bpd_by_obs[obs] = min(min_test_bpd_by_obs[obs], test_bpd)
