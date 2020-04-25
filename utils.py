@@ -336,6 +336,7 @@ def discretized_mix_logistic_loss_1d_averaged(x, ls):
 
 def _binarized_label(x):
     assert x.size(1) == 1
+    # NOTE: temporarily disabled for rebuttal, checking [0, 1] images + mask conditioning
     x = x * .5 + .5  # Scale from [-1, 1] to [0, 1] range
     x = binarize_torch(x)  # binarize image. Should be able to just cast,
                             # since x is either 0. or 1., but this could avoid float
@@ -502,6 +503,7 @@ def sample_from_binary_logits(l, coord1, coord2):
     assert l.size(1) == 2
     l = l[:, :, coord1, coord2]
     pixels = torch.distributions.categorical.Categorical(logits=l).sample()
+    # NOTE: Disabled for {0, 1} input rebuttal experiments
     pixels = pixels * 2. - 1.
     return pixels.unsqueeze(1)
 

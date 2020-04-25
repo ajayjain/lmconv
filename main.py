@@ -227,7 +227,7 @@ if 'mnist' in args.dataset :
     assert args.n_bits == 8
     if args.binarize:
         rescaling = lambda x : (binarize_torch(x) - .5) * 2.  # binarze and rescale [0, 1] images into [-1, 1] range
-        #rescaling = lambda x : binarize_torch(x)  # binarze [0, 1] images NOTE: temporary for rebuttal
+        #rescaling = lambda x : binarize_torch(x).float()  # binarze [0, 1] images NOTE: temporary for rebuttal
     else:
         rescaling = lambda x : (x - .5) * 2.  # rescale [0, 1] images into [-1, 1] range
     rescaling_inv = lambda x : .5 * x + .5
@@ -870,7 +870,7 @@ elif args.mode == "test":
         for obs in resized_obses:
             logger.info(f"testing with obs {obs2str(obs)}...")
             test_bpd = test(model,
-                            all_masks_by_obs[obs],
+                            [all_masks_by_obs[obs][i] for i in args.test_masks] if args.test_masks else all_masks_by_obs[obs],
                             test_loader_by_obs[obs],
                             checkpoint_epochs,
                             progress_bar=True,
