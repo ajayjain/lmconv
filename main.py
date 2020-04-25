@@ -227,11 +227,9 @@ if 'mnist' in args.dataset :
     assert args.n_bits == 8
     if args.binarize:
         rescaling = lambda x : (binarize_torch(x) - .5) * 2.  # binarze and rescale [0, 1] images into [-1, 1] range
-        #rescaling = lambda x : binarize_torch(x).float()  # binarze [0, 1] images NOTE: temporary for rebuttal
     else:
         rescaling = lambda x : (x - .5) * 2.  # rescale [0, 1] images into [-1, 1] range
     rescaling_inv = lambda x : .5 * x + .5
-    #rescaling_inv = lambda x : x  # NOTE: temporary for rebuttal
     ds_transforms = transforms.Compose([transforms.ToTensor(), rescaling])
 
     train_loader = torch.utils.data.DataLoader(datasets.MNIST(args.data_dir, download=True,
@@ -278,12 +276,6 @@ elif 'celebahq' in args.dataset :
             x = (2. / (n_bins - 1)) * x - 1.
             return x
         rescaling_inv = lambda x : .5 * x + .5  # rescale [-1, 1] range to [0, 1] range
-        #def rescaling_inv(x):
-        #    # rescale images from [-1, 1] to [0, n_bins-1]
-        #    x = ((n_bins - 1) / 2) * (x + 1.)
-        #    # increase bit depth to [0, 255] range
-        #    x = x * depth_divisor
-        #    return x
 
     # NOTE: Random resizing of images during training is not supported for CelebA-HQ. Will use 256x256 resolution.
     def get_celeba_dataloaders():
