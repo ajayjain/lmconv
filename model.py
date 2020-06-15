@@ -10,6 +10,7 @@ from torch.nn.utils import weight_norm as wn
 from torch.utils.checkpoint import checkpoint
 
 from layers import *
+from locally_masked_convolution import locally_masked_conv2d
 from utils import *
 
 
@@ -69,13 +70,13 @@ class OurPixelCNN(nn.Module):
         self.binarize = binarize
 
         if weight_norm:
-            conv_op_init = lambda cin, cout: wn(input_masked_conv2d(cin, cout, kernel_size=kernel_size, bias=conv_bias, mask_weight=conv_mask_weight))
-            conv_op_dilated = lambda cin, cout: wn(input_masked_conv2d(cin, cout, kernel_size=kernel_size, dilation=max_dilation, bias=conv_bias, mask_weight=conv_mask_weight))
-            conv_op = lambda cin, cout: wn(input_masked_conv2d(cin, cout, kernel_size=kernel_size, bias=conv_bias, mask_weight=conv_mask_weight))
+            conv_op_init = lambda cin, cout: wn(locally_masked_conv2d(cin, cout, kernel_size=kernel_size, bias=conv_bias, mask_weight=conv_mask_weight))
+            conv_op_dilated = lambda cin, cout: wn(locally_masked_conv2d(cin, cout, kernel_size=kernel_size, dilation=max_dilation, bias=conv_bias, mask_weight=conv_mask_weight))
+            conv_op = lambda cin, cout: wn(locally_masked_conv2d(cin, cout, kernel_size=kernel_size, bias=conv_bias, mask_weight=conv_mask_weight))
         else:
-            conv_op_init = lambda cin, cout: input_masked_conv2d(cin, cout, kernel_size=kernel_size, bias=conv_bias, mask_weight=conv_mask_weight)
-            conv_op_dilated = lambda cin, cout: input_masked_conv2d(cin, cout, kernel_size=kernel_size, dilation=max_dilation, bias=conv_bias, mask_weight=conv_mask_weight)
-            conv_op = lambda cin, cout: input_masked_conv2d(cin, cout, kernel_size=kernel_size, bias=conv_bias, mask_weight=conv_mask_weight)
+            conv_op_init = lambda cin, cout: locally_masked_conv2d(cin, cout, kernel_size=kernel_size, bias=conv_bias, mask_weight=conv_mask_weight)
+            conv_op_dilated = lambda cin, cout: locally_masked_conv2d(cin, cout, kernel_size=kernel_size, dilation=max_dilation, bias=conv_bias, mask_weight=conv_mask_weight)
+            conv_op = lambda cin, cout: locally_masked_conv2d(cin, cout, kernel_size=kernel_size, bias=conv_bias, mask_weight=conv_mask_weight)
 
         down_nr_resnet = [nr_resnet] + [nr_resnet + 1] * 2
         self.down_layers = nn.ModuleList([OurPixelCNNLayer_down(down_nr_resnet[i], nr_filters, self.resnet_nonlinearity, conv_op,

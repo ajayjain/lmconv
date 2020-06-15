@@ -573,4 +573,3 @@ def load_part_of_model(path, model, optimizer=None):
             # TODO: load param_groups key?
 
     return checkpoint["epoch"], checkpoint.get("global_step", -1)
-
