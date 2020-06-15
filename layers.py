@@ -13,10 +13,10 @@ from utils import *
 
 logger = logging.getLogger("gen")
 
-# DEBUG TO REMOVE WEIGHT NORMALIZATION
-from torch.nn.utils import weight_norm as wn
-# def wn(op):
-#     return op
+# NOTE: Uncomment to enable weight normalization
+# from torch.nn.utils import weight_norm as wn
+def wn(op):
+    return op
 
 def identity(x, *extra_args, **extra_kwargs):
     return x
@@ -31,7 +31,6 @@ class nin(nn.Module):
         og_x = x
         # assumes pytorch ordering
         """ a network in network layer (1x1 CONV) """
-        # TODO : try with original ordering
         x = x.permute(0, 2, 3, 1)
         shp = [int(y) for y in x.size()]
         out = self.lin_a(x.contiguous().view(shp[0]*shp[1]*shp[2], shp[3]))
@@ -160,7 +159,6 @@ class gated_resnet(nn.Module):
         x = self.dropout(x)
         x = self.conv_out(x, mask=mask)
         a, b = torch.chunk(x, 2, dim=1)
-        # TODO: Should x be normalized instead? or c3?
         a = self.norm_out(a, mask=mask)
         c3 = a * torch.sigmoid(b)
         return og_x + c3

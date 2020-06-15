@@ -17,10 +17,11 @@ from torchvision import datasets, transforms, utils
 import tqdm
 import wandb
 
+from baseline import PixelCNN
 from masking import *
-from model import *
-from ours import *
+from model import OurPixelCNN
 from utils import *
+
 
 parser = argparse.ArgumentParser()
 # data I/O
@@ -54,7 +55,6 @@ parser.add_argument('--ours', action='store_true')
 parser.add_argument('--max_celeba_train_batches', type=int, default=-1)
 parser.add_argument('--max_celeba_test_batches', type=int, default=-1)
 parser.add_argument('--celeba_size', type=int, default=256)
-# parser.add_argument('--max_test_batches', type=int, default=-1)
 parser.add_argument('--n_bits', type=int, default=8)
 # pixelcnn++ and our model
 parser.add_argument('-q', '--nr_resnet', type=int, default=5,
@@ -86,8 +86,7 @@ parser.add_argument('-dp', '--dropout_prob', type=float, default=0.5,
                          'Argument only used if --ours is provided. Set to 0 to disable '
                          'dropout entirely.')
 parser.add_argument('-nm', '--normalization', type=str, default='weight_norm',
-                    choices=["none", "weight_norm", "instance_norm", "instance_norm_affine",
-                             "order_rescale", "pono"])
+                    choices=["none", "weight_norm", "order_rescale", "pono"])
 parser.add_argument('-af', '--accum_freq', type=int, default=1,
                     help='Batches per optimization step. Used for gradient accumulation')
 parser.add_argument('--two_stream', action="store_true", help="Enable two stream model")
@@ -343,13 +342,7 @@ else:
 if args.ours:
     logger.info("Constructing our model")
 
-    if args.normalization == "instance_norm":
-        raise NotImplementedError("Causal instance norm not implemented")
-        # norm_op = lambda num_channels: nn.InstanceNorm2d(num_channels)
-    elif args.normalization == "instance_norm_affine":
-        raise NotImplementedError("Causal instance norm not implemented")
-        # norm_op = lambda num_channels: nn.InstanceNorm2d(num_channels, affine=True)
-    elif args.normalization == "order_rescale":
+    if args.normalization == "order_rescale":
         norm_op = lambda num_channels: OrderRescale()
     elif args.normalization == "pono":
         norm_op = lambda num_channels: PONO()
@@ -470,8 +463,6 @@ if args.amp_opt_level:
 model = nn.DataParallel(model)
 if not args.disable_wandb:
     wandb.watch(model)
-
-
 
 
 # Load model parameters from checkpoint
@@ -700,8 +691,6 @@ if args.mode == "train":
                 if args.clip > 0:
                     # Compute and rescale gradient norm
                     gradient_norm = nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-                    # if gradient_norm > args.clip:
-                        # logger.warning(f"Clipped gradients to norm {args.clip}")
                 else:
                     # Just compute the gradient norm
                     parameters = list(filter(lambda p: p.grad is not None, model.parameters()))
@@ -882,4 +871,3 @@ elif args.mode == "count_params":
             num_trainable_params += np.prod(param.size())
     print("  Total number of parameters in model:", num_params)
     print("  Total number of trainable parameters in model:", num_trainable_params)
-
