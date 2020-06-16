@@ -96,10 +96,10 @@ class OurPixelCNN(nn.Module):
         self.norm_us = nn.ModuleList([feature_norm_op(nr_filters) for _ in range(2)]) if feature_norm_op else None
 
         if self.binarize:
-            self.nin_out = nin(nr_filters, 2)
+            self.nin_out = nin(nr_filters, 2, weight_norm=True)
         else:
             num_mix = 3 if input_channels == 1 else 10
-            self.nin_out = nin(nr_filters, num_mix * nr_logistic_mix)
+            self.nin_out = nin(nr_filters, num_mix * nr_logistic_mix, weight_norm=True)
 
     def forward(self, x, sample=False, mask_init=None, mask_undilated=None, mask_dilated=None):
         # similar as done in the tf repo. remake init_padding if input height or width change :  

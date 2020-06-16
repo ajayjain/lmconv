@@ -2,29 +2,28 @@ import logging
 import math
 import pdb
 
+import numpy as np
 import torch 
 import torch.nn as nn
 from torch.nn.parameter import Parameter
 import torch.nn.functional as F
-from torch.autograd import Variable
-import numpy as np
+from torch.nn.utils import weight_norm as wn
 
 from utils import * 
 
 logger = logging.getLogger("gen")
 
-# NOTE: Uncomment to enable weight normalization
-# from torch.nn.utils import weight_norm as wn
-def wn(op):
-    return op
 
 def identity(x, *extra_args, **extra_kwargs):
     return x
 
 class nin(nn.Module):
-    def __init__(self, dim_in, dim_out):
+    def __init__(self, dim_in, dim_out, weight_norm=True):
         super(nin, self).__init__()
-        self.lin_a = wn(nn.Linear(dim_in, dim_out))
+        if weight_norm:
+            self.lin_a = wn(nn.Linear(dim_in, dim_out))
+        else:
+            self.lin_a = nn.Linear(dim_in, dim_out)
         self.dim_out = dim_out
     
     def forward(self, x):

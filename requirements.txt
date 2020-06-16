@@ -1,5 +1,6 @@
 graphviz>=0.13.2
 hilbertcurve>=1.0.3
+https://storage.googleapis.com/tensorflow/linux/cpu/tensorflow_cpu-2.1.0-cp37-cp37m-manylinux2010_x86_64.whl
 ipython>=7.10.1
 matplotlib>=3.1.1
 numpy>=1.17.3
@@ -7,4 +8,4 @@ Pillow>=6.2.1
 tensorboard>=2.0.0
 tensorboardX>=1.9
 tqdm>=4.30.0
-https://storage.googleapis.com/tensorflow/linux/cpu/tensorflow_cpu-2.1.0-cp37-cp37m-manylinux2010_x86_64.whl
+wandb

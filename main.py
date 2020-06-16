@@ -18,6 +18,7 @@ import tqdm
 import wandb
 
 from baseline import PixelCNN
+from layers import PONO
 from masking import *
 from model import OurPixelCNN
 from utils import *
@@ -641,7 +642,8 @@ def sample(model, generation_idx, mask_init, mask_undilated, mask_dilated, batch
         if (n_pix <= 256 and n_pix % 32 == 0) or n_pix % 256 == 0:
             sample_save_path = os.path.join(run_dir, f'{args.mode}_{args.sample_region}_{args.sample_size_h}x{args.sample_size_w}_o1{args.sample_offset1}_o2{args.sample_offset2}_obs{obs2str(obs)}_ep{checkpoint_epochs}_order{sample_order_i}_{n_pix}of{len(sample_idx)}pix{"_quantize" if args.sample_quantize else ""}.png')
             utils.save_image(rescaling_inv(data), sample_save_path, nrow=4, padding=5, pad_value=1, scale_each=False)
-            wandb.log({sample_save_path: wandb.Image(sample_save_path)}, step=n_pix)
+            if not args.disable_wandb:
+                wandb.log({sample_save_path: wandb.Image(sample_save_path)}, step=n_pix)
     data = rescaling_inv(data).cpu()
 
     if batch_to_complete is not None and context is not None:
@@ -827,9 +829,11 @@ elif args.mode == "sample":
             logger.info('sampling images with observation %s, ordering variant %d...', obs2str(obs), sample_order_i)
             sample_t = sample(model, all_generation_idx[sample_order_i], *all_masks[sample_order_i], batch_to_complete, obs)
             sample_save_path = os.path.join(run_dir, f'{args.mode}_{args.sample_region}_ep{checkpoint_epochs}_{args.sample_size_h}x{args.sample_size_w}_o1{args.sample_offset1}_o2{args.sample_offset2}_obs{obs2str(obs)}_order{sample_order_i}_ltemp{args.sample_logistic_temperature}_mtemp{args.sample_mixture_temperature}{"_quantize" if args.sample_quantize else ""}.png')
+            logger.info('saving samples to %s', sample_save_path)
             utils.save_image(sample_t, sample_save_path,
                              nrow=args.save_nrow, padding=args.save_padding, pad_value=1, scale_each=False)
-            wandb.log({sample_save_path: wandb.Image(sample_save_path), "epoch": checkpoint_epochs})
+            if not args.disable_wandb:
+                wandb.log({sample_save_path: wandb.Image(sample_save_path), "epoch": checkpoint_epochs})
 elif args.mode == "test":
     if args.test_region == "full":
         slice_op = lambda x: x

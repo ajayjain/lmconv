@@ -56,35 +56,9 @@ def log_prob_from_logits(x):
     return x - m - torch.log(torch.sum(torch.exp(x - m), dim=axis, keepdim=True))
 
 
-# def average_loss(log_probs_fn, x, ls, *xargs):
-#     """ ensemble multiple nn outputs (ls) by averaging likelihood """
-#     # NOTE: Incorrect ensembling technique, gets 2.7 bpd
-#     all_log_probs = []
-#     for l in ls:
-#         log_probs = log_probs_fn(x, l, *xargs)  # B x H x W x num_logistic_mix
-#         all_log_probs.append(log_probs)
-    
-#     # DEBUG: save log probs for each ensemble component
-#     stacked = torch.stack(all_log_probs, dim=4)
-#     stacked = stacked.cpu().numpy()
-#     # np.save("/home/ajay/gen/pixel-cnn-pp/cifar_ensemble_log_probs_to_average.npy", {
-#     #     "log_probs": stacked,
-#     #     "ls": [l.cpu().numpy() for l in ls],
-#     #     "x": x.cpu().numpy()
-#     # })
-#     print("SAVED ENSEMBLE LOG PROBS")
-#     import sys
-
-#     all_log_probs = torch.cat(all_log_probs, dim=-1) - np.log(len(ls))
-#     loss = -torch.sum(log_sum_exp(all_log_probs))
-#     print(loss, loss / (3 * 32 * 32 * 32))
-#     sys.exit()
-#     return loss
-
-
 def average_loss(log_probs_fn, x, ls, *xargs):
     """ ensemble multiple nn outputs (ls) by averaging likelihood """
-    # Correct but limited, ensembles at the level of the joint
+    # Ensembles at the level of the joint distribution
     all_log_probs = []
     for l in ls:
         log_probs = log_probs_fn(x, l, *xargs)  # B x H x W x num_logistic_mix
@@ -95,63 +69,6 @@ def average_loss(log_probs_fn, x, ls, *xargs):
     all_log_probs = torch.stack(all_log_probs, dim=1) - np.log(len(ls))  # B x len(ls)
     loss = -torch.sum(log_sum_exp(all_log_probs))
     return loss
-
-
-'''
-sampled_conditional_idx = {
-    ("cifar", "s_curve"): np.load("/work/ajayj/conditionals/cifar_s_curve_grouped_conditional_idx.npy", allow_pickle=True).item(),
-}
-
-
-def average_loss(log_probs_fn, x, ls, *xargs):
-    """ ensemble multiple nn outputs (ls) by averaging likelihood """
-    # Ensembles many joints defined by loaded indices
-    log_conditionals = []
-    for l in ls:
-        log_probs = log_probs_fn(x, l, *xargs)  # B x H x W x num_logistic_mix
-        log_prob = log_sum_exp(log_probs)  # B x H x W
-        log_prob = log_prob.view(log_prob.size(0), -1)  # B x D
-        log_conditionals.append(log_prob)
-
-    log_conditionals = torch.stack(log_conditionals, dim=2)  # B x D x K_auto
-    _, D, K_auto = log_conditionals.shape
-    I = np.eye(K_auto, dtype=np.int)  # K_auto x K_auto
-
-    batchwise_log_probs = []
-    key = ("cifar", "s_curve")
-    all_conditional_idx = list(sampled_conditional_idx[key]["all_idx"])  # K x D
-    weights = list(sampled_conditional_idx[key]["all_edge_counts"])
-    # Add autoregressive orders
-    for k in range(K_auto):
-        all_conditional_idx.append(np.zeros(D, dtype=np.int) + k)
-        weights.append(D*(D-1)//2)
-    weights = torch.tensor(weights).float().to(log_probs.device)
-    # Option 1: Normalize and log weights
-    # weights = weights / torch.sum(weights)
-    # log_weights = torch.log(weights)
-    # Option 2: Log softmax weights
-    log_weights = F.log_softmax(weights / 10000)
-
-    # print("weights", list(weights.cpu().numpy()))
-    # print("log_weights", list(log_weights.cpu().numpy()))
-    # print("exp log weights", list(torch.exp(log_weights).cpu().numpy()))
-    # import sys
-    # sys.exit()
-
-    # Aggregate over ensemble
-    for conditional_idx in all_conditional_idx:
-        one_hot = I[conditional_idx][None]  # 1 x D x K_auto
-        one_hot = torch.from_numpy(one_hot).to(log_conditionals.device)
-        selected_log_conditionals = torch.sum(log_conditionals * one_hot, axis=2)  # B x D
-        log_prob = selected_log_conditionals.sum(1)  # B
-        batchwise_log_probs.append(log_prob)
-    # Average probs for each image in the batch
-    K = len(batchwise_log_probs)
-    batchwise_log_probs = torch.stack(batchwise_log_probs, axis=1)  # B x K
-    log_prob = log_sum_exp(batchwise_log_probs + log_weights.unsqueeze(0))
-    # log_prob = log_sum_exp(batchwise_log_probs) - float(np.log(K))
-    return -torch.sum(log_prob)
-'''
 
 
 ###########################
@@ -484,9 +401,6 @@ def sample_from_discretized_mix_logistic(l, coord1, coord2, nr_mix, mixture_temp
 
     out = torch.cat([x0.view(xs[:-1] + [1]), x1.view(xs[:-1] + [1]), x2.view(xs[:-1] + [1])], dim=3)
     return out.data[:, coord1, coord2, :]
-    # put back in Pytorch ordering
-    # out = out.permute(0, 3, 1, 2)
-    # return out
 
 
 def sample_from_binary_logits(l, coord1, coord2):
@@ -546,8 +460,9 @@ def load_part_of_model(path, model, optimizer=None):
                 model.state_dict()[name].copy_(param)
                 added += 1
             except Exception as e:
-                logger.error("Error loading model.state_dict()[%s]: %s", name, e)
-                pass
+                logger.warning("Error loading model.state_dict()[%s]: %s", name, e)
+        else:
+            logger.warning("Key present in checkpoint that is not present in model.state_dict(): %s", name)
     logger.info('Loadded %s fraction of params:' % (added / float(len(model.state_dict().keys()))))
 
     # Restore optimizer
