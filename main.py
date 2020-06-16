@@ -77,6 +77,7 @@ parser.add_argument('-x', '--max_epochs', type=int,
                     default=5000, help='How many epochs to run in total?')
 parser.add_argument('-s', '--seed', type=int, default=1,
                     help='Random seed to use')
+parser.add_argument('--ema', type=float, default=1)
 # our model
 parser.add_argument('-k', '--kernel_size', type=int, default=5,
                     help='Size of conv kernels')
@@ -465,7 +466,6 @@ model = nn.DataParallel(model)
 if not args.disable_wandb:
     wandb.watch(model)
 
-
 # Load model parameters from checkpoint
 if args.load_params:
     if os.path.exists(args.load_params):
@@ -476,7 +476,7 @@ if args.load_params:
     checkpoint_epochs, checkpoint_step = load_part_of_model(load_params,
                                            model=model.module,
                                            optimizer=None if args.do_not_load_optimizer else optimizer)
-    logger.info(f"Model parameters loaded from {load_params}, from after {checkpoint_epochs} training epochs")
+    logger.info(f"Model parameters loaded from {load_params}, from after {checkpoint_epochs} training epochs, {checkpoint_step} training steps")
 elif args.load_last_params:
     # Find the most recent checkpoint (highest epoch number).
     checkpoint_re = f"{args.exp_id}_ep([0-9]+)\\.pth"
@@ -505,6 +505,18 @@ elif args.load_last_params:
 else:
     checkpoint_epochs = -1
     checkpoint_step = -1
+
+if checkpoint_epochs > 0:
+    # Decrease learning rate since we resumed
+    logger.info("Adjusting lr due to checkpoint resumption. Before adjustment, lr=%f", scheduler.get_last_lr()[0])
+    for _ep in range(checkpoint_epochs + 1):
+        scheduler.step()
+    logger.info("After adjustment, lr=%f", scheduler.get_last_lr()[0])
+
+# Initialize exponential moving average of parameters
+if args.ema < 1:
+    ema = EMA(args.ema)
+    ema.register(model.module)
 
 
 def test(model, all_masks, test_loader, epoch="N/A", progress_bar=True,
@@ -704,6 +716,8 @@ if args.mode == "train":
                 writer.add_scalar('train/gradient_norm', gradient_norm, global_step)
                 wandb.log({"train/gradient_norm": gradient_norm, "epoch": epoch}, step=global_step)
                 optimizer.step()
+                if args.ema < 1:
+                    ema.update(model.module)
             train_loss += loss.item()
 
             writer.add_scalar('train/bpd', train_bpd.item(), global_step)
@@ -781,6 +795,7 @@ if args.mode == "train":
             try:
                 save_dict["model_state_dict"] = model.module.state_dict()
                 save_dict["optimizer_state_dict"] = optimizer.state_dict()
+                save_dict["ema_state_dict"] = ema.state_dict()
                 torch.save(save_dict, save_path)
                 if (epoch + 1) % args.save_interval != 0: 
                     # Remove last off-cycle checkpoint

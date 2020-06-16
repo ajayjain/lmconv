@@ -488,3 +488,24 @@ def load_part_of_model(path, model, optimizer=None):
             # TODO: load param_groups key?
 
     return checkpoint["epoch"], checkpoint.get("global_step", -1)
+
+
+class EMA():
+    # Computes exponential moving average of model parameters, adapted from https://discuss.pytorch.org/t/how-to-apply-exponential-moving-average-decay-for-variables/10856/3
+    def __init__(self, mu):
+        self.mu = mu
+        self.shadow = {}
+
+    def register(self, model):
+        for name, param in model.state_dict().items():
+            self.shadow[name] = param.clone()
+
+    def update(self, model):
+        for name, param in model.state_dict().items():
+            assert name in self.shadow
+            new_average = self.mu * param + (1.0 - self.mu) * self.shadow[name]
+            self.shadow[name] = new_average.clone()
+            return new_average
+
+    def state_dict(self):
+        return self.shadow
