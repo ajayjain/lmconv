@@ -60,7 +60,7 @@
       We train a single PixelCNN++ to support 8 generation orders simultaneously, outperforming PixelCNN++ on distribution estimation 
       and allowing globally coherent image completions on CIFAR10, CelebA-HQ and MNIST. Locally masked convolutions are efficient and easy to implement.
     </p>
-      <img width="768" max-width="100%" src="resources/overview.png" />
+      <a href="resources/overview.png"><img width="768" max-width="100%" src="resources/overview.png" /></a>
       <p>
         <b>Abstract:</b> There is substantial interest in modeling high dimensional data distributions such as images, with applications including compression, multimedia generation, anomaly detection, and data completion. 
         State-of-the-art density estimators for natural images are autoregressive, decomposing the joint distribution over pixels into a product of conditionals. 
@@ -96,7 +96,7 @@
         This can be efficiently implemented with the im2col algorithm, which computes convolutions with matrix multiplication.
       </div>
       <br/>
-          <center><a href="resources/method.png"><img src = "resources/im2col.png" width="800px"></img></a><br></center>
+          <center><a href="resources/im2col.png"><img src = "resources/im2col.png" width="800px"></img></a><br></center>
       <br/><hr>
 
 
@@ -104,7 +104,7 @@
             <div style="width:800px; margin:0 auto; text-align: left">
                 PyTorch code for our paper is open-source and available on GitHub. We include a memory-efficient, pure Python implementation of the locally masked convolution, as well as training and evaluation code.
             </div>
-            <table align=center width=900px>
+            <table align=center width=300px>
               <tr>
                 <td width=300px align=center>
                   <span style="font-size:28px"><a href='https://github.com/ajayjain/lmconv'>[GitHub]</a></span>
@@ -113,7 +113,7 @@
             </table>
             <br><hr>
 
-            <table align=center width=850px>
+            <table align=center width=700px style="max-width: 100%">
               <center><h1>Paper and Bibtex</h1></center>
               <tr>
               <td width=250px align=left>
@@ -123,9 +123,9 @@
               <!-- <span style="font-size:20pt">[Paper forthcoming]</span> -->
               </center>
               </td>
-              <td width=50px align=center>
+              <td width=20px align=center>
               </td>
-              <td width=550px align=left>
+              <td width=250px align=left>
               <p style="text-align:left;"><b><span style="font-size:20pt">Citation</span></b><br/><span style="font-size:6px;">&nbsp;<br/></span> <span style="font-size:15pt">Ajay Jain, Pieter Abbeel, Deepak Pathak. <b>Locally Masked Convolution for Autoregressive Models.</b> In <em>Conference on Uncertainty in Artificial Intelligence (UAI)</em>, 2020.</span></p>
               </td>
               </tr>
@@ -138,10 +138,13 @@
                 <div class="paper" id="lmconv2020_bib">
 <pre xml:space="preserve">
 @inproceedings{jain2020lmconv,
-    title={Locally Masked Convolution for Autoregressive Models},
-    author={Ajay Jain and Pieter Abbeel and Deepak Pathak},
+    title={Locally Masked Convolution
+    for Autoregressive Models},
+    author={Ajay Jain and Pieter
+    Abbeel and Deepak Pathak},
     year={2020},
-    booktitle={Conference on Uncertainty in Artificial Intelligence (UAI)},
+    booktitle={Conference on Uncertainty
+    in Artificial Intelligence (UAI)},
 }</pre>
                 </div>
                 </td>
