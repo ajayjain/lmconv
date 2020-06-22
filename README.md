@@ -48,7 +48,12 @@ python main.py -d cifar -b 32 --ours -k 3 --normalization pono --order s_curve -
 
 Evaluate CIFAR10 conditional (inpainting) likelihoods for the top half of image with 2 orders (2.762 bpd). We add flags specifying the hidden region and generation order ([guide to `--test-mask` numbering](https://drive.google.com/open?id=1ETrntyAKvzYNMpntMFfj8WM5OgQMf2j_&authuser=ajayj%40berkeley.edu&usp=drive_fs)):
 ```
-python main.py -d cifar -b 32 --ours -k 3 --normalization pono --order s_curve --randomize_order -dp 0 --exp_name s_rand_dp0_pono -ID 10056 --mode test --disable_wandb --run_dir runs/runs/cifar_run --load_params cifar_s8.pth --test_region custom --test_maxh 16 --test_maxw 32 --test_masks 1 3
+python main.py -d cifar -b 32 --ours -k 3 --normalization pono --order s_curve --randomize_order -dp 0 --mode test --disable_wandb --run_dir runs/cifar_run --load_params cifar_s8.pth --test_region custom --test_maxh 16 --test_maxw 32 --test_masks 1 3
+```
+
+Complete top region of CIFAR10 images:
+```
+python main.py -d cifar -b 32 --ours -k 3 --normalization pono --order s_curve -dp 0 --mode sample --disable_wandb --run_dir runs/cifar_run --load_params cifar_s8.pth --sample_region custom --sample_offset1 -16 --sample_offset2 -16 --sample_size_h 12 --sample_size_w 32 --sample_batch_size 48 --base_order_reflect_rows
 ```
 
 ### Credits
