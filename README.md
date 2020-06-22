@@ -56,6 +56,17 @@ Complete top region of CIFAR10 images:
 python main.py -d cifar -b 32 --ours -k 3 --normalization pono --order s_curve -dp 0 --mode sample --disable_wandb --run_dir runs/cifar_run --load_params cifar_s8.pth --sample_region custom --sample_offset1 -16 --sample_offset2 -16 --sample_size_h 12 --sample_size_w 32 --sample_batch_size 48 --base_order_reflect_rows
 ```
 
+### Train model
+Train model on CIFAR10 (`-t` configures checkpoint save frequency, `-ID` allows runs to be numbered):
+```
+python main.py -d cifar -b 32 -t 10 --ours -c 2e6 -k 3 --normalization pono --order s_curve --randomize_order -dp 0 --exp_name s_rand_dp0_pono -ID 10000 --test_interval 4
+```
+
+Average checkpoints (optional, helps likelihoods slightly. need to train with `-t 1` to save checkpoints every epoch):
+```
+python average_checkpoints.py --run_id 10000 --inputs runs/<RUN_DIR> --output averaged.pth --num-epoch-checkpoints <NUM_CHECKPOINTS>
+```
+
 ### Credits
 This code was originally based on a [PyTorch implementation](https://github.com/pclucas14/pixel-cnn-pp) of [PixelCNN++](https://arxiv.org/pdf/1701.05517.pdf) by Lucas Caccia.
 
