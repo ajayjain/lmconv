@@ -50,17 +50,18 @@
       <center><span style="font-size:20px;"><a href='http://www.auai.org/uai2020/'>Conference on Uncertainty in AI (UAI), 2020</a></span></center>
 
       <div class="table-like" style="justify-content:space-evenly;max-width:700px;margin:auto;padding:5px">
-        <div><center><span style="font-size:28px">[Paper forthcoming]</span></center></div>
-        <div><center><span style="font-size:28px"><a href='https://github.com/ajayjain/lmconv'>[GitHub Code]</a></span></center> </div>
+        <div><center><span style="font-size:28px"><a href='#'>[Paper]</a></span></center></div>
+        <div><center><span style="font-size:28px"><a href='https://github.com/ajayjain/lmconv'>[GitHub]</a></span></center> </div>
       </div>
 
       <div style="width:800px; margin:0 auto; text-align=right;">
       <p>
       <b>Summary:</b> Our Locally Masked PixelCNN generates natural images in customizable orders like zig-zags and Hilbert Curves.
       We train a single PixelCNN++ to support 8 generation orders simultaneously, outperforming PixelCNN++ on distribution estimation 
-      and allowing globally coherent image completions on CIFAR10, CelebA-HQ and MNIST. Locally masked convolutions are efficient and easy to implement.
+      and allowing globally coherent image completions on CIFAR10, CelebA-HQ and MNIST.
+      We control the order with our proposed locally masked convolution operation, which is efficient and easy to implement via matrix multiplication.
     </p>
-      <a href="resources/overview.png"><img width="768" max-width="100%" src="resources/overview.png" /></a>
+      <a href="resources/overview_lmconv.png"><img width="768" max-width="100%" src="resources/overview_lmconv.png" /></a>
       <p>
         <b>Abstract:</b> There is substantial interest in modeling high dimensional data distributions such as images, with applications including compression, multimedia generation, anomaly detection, and data completion. 
         State-of-the-art density estimators for natural images are autoregressive, decomposing the joint distribution over pixels into a product of conditionals. 
@@ -126,7 +127,10 @@
               <td width=20px align=center>
               </td>
               <td width=250px align=left>
-              <p style="text-align:left;"><b><span style="font-size:20pt">Citation</span></b><br/><span style="font-size:6px;">&nbsp;<br/></span> <span style="font-size:15pt">Ajay Jain, Pieter Abbeel, Deepak Pathak. <b>Locally Masked Convolution for Autoregressive Models.</b> In <em>Conference on Uncertainty in Artificial Intelligence (UAI)</em>, 2020.</span></p>
+              <p style="text-align:left;">
+                <b><span style="font-size:20pt">Citation</span></b>
+                <br/>
+                <span style="font-size:6px;">&nbsp;<br/></span> <span style="font-size:15pt">Ajay Jain, Pieter Abbeel, Deepak Pathak. <b>Locally Masked Convolution for Autoregressive Models.</b> In <em>Conference on Uncertainty in Artificial Intelligence (UAI)</em>, 2020.</span></p>
               </td>
               </tr>
               <tr>
