@@ -28,7 +28,7 @@ pip install -r requirements.txt
 ```
 NOTE: this installs the CPU-only version of Tensorflow, which is used to load CelebA-HQ data. We use the CPU version to prevent Tensorflow from using GPU memory.
 
-### Get CelebA-HQ data
+CIFAR10 and MNIST images will be automatically downloaded by the code, but CelebA-HQ needs to be downloaded manually:
 ```
 mkdir data
 cd data
@@ -36,11 +36,16 @@ wget https://storage.googleapis.com/glow-demo/data/celeba-tfr.tar
 tar -xvzf celeba-tfr.tar
 ```
 
+Pretrained model checkpoints are available [here](https://drive.google.com/drive/folders/1ESeIKS3itwaFO_XigF4g-SAXFofwfEjF?usp=sharing).
+
 ### Running the code
+Test CIFAR10 model, 8 orders (2.887 bpd):
 ```
-python main.py
+mkdir runs/cifar_run  # for storing logs and images
+python main.py -d cifar -b 32 --ours -k 3 --normalization pono --order s_curve --randomize_order -dp 0 --mode test --disable_wandb --run_dir runs/cifar_run --load_params cifar_s8.pth
 ```
+Remove the `--randomize_order` flag to test with a single order (2.909 bpd).
 
 ### Credits
-This code is based on a [PyTorch implementation](https://github.com/pclucas14/pixel-cnn-pp) of [PixelCNN++](https://arxiv.org/pdf/1701.05517.pdf) by Lucas Caccia.
+This code was originally based on a [PyTorch implementation](https://github.com/pclucas14/pixel-cnn-pp) of [PixelCNN++](https://arxiv.org/pdf/1701.05517.pdf) by Lucas Caccia.
 
