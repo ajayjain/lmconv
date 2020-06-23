@@ -1,7 +1,11 @@
 ## Locally Masked Convolution
 Code for the UAI 2020 paper "Locally Masked Convolution for Autoregressive Models", implemented with PyTorch. The Locally Masked Convolution layer allows PixelCNN-style autoregressive models to use a custom pixel generation order, rather than a raster scan. Training and evaluation code are available in `main.py`. To use locally masked convolutions in your project, see `locally_masked_convolution.py` for a memory-efficient implementation that depends only on torch. The layer uses masks that are generated in `masking.py`.
 
-<img src="https://ajayjain.github.io/lmconv/resources/overview_lmconv.png" width="600px" alt="Overview of locally masked convolutions">
+Paper: [https://arxiv.org/abs/2006.12486](https://arxiv.org/abs/2006.12486)
+
+Website: [https://ajayjain.github.io/lmconv/](https://ajayjain.github.io/lmconv/)
+
+<img src="https://ajayjain.github.io/lmconv/resources/lmconv_overview.png" width="600px" alt="Image completions and samples using a Locally Masked Convolutions">
 
 ### Citation
 If you find our paper or code relevant to your research, please cite our UAI 2020 paper:
