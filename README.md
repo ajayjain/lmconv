@@ -46,6 +46,12 @@ mkdir runs/cifar_run  # for storing logs and images
 python main.py -d cifar -b 32 --ours -k 3 --normalization pono --order s_curve --randomize_order -dp 0 --mode test --disable_wandb --run_dir runs/cifar_run --load_params cifar_s8.pth
 ```
 
+Evaluate MNIST whole-image likelihoods with 8 S-curve orders (77.56 nats).
+```
+mkdir runs/mnist_run  # for storing logs and images
+python main.py -d mnist -b 32 --ours -k 3 --normalization pono --order s_curve --randomize_order -dp 0 --binarize --mode test --disable_wandb --run_dir runs/mnist_run --load_params binary_mnist_ep159_s8.pth
+```
+
 Evaluate CIFAR10 conditional (inpainting) likelihoods for the top half of image with 2 orders (2.762 bpd). We add flags specifying the hidden region and generation order ([guide to `--test-mask` numbering](https://drive.google.com/open?id=1ETrntyAKvzYNMpntMFfj8WM5OgQMf2j_&authuser=ajayj%40berkeley.edu&usp=drive_fs)):
 ```
 python main.py -d cifar -b 32 --ours -k 3 --normalization pono --order s_curve --randomize_order -dp 0 --mode test --disable_wandb --run_dir runs/cifar_run --load_params cifar_s8.pth --test_region custom --test_maxh 16 --test_maxw 32 --test_masks 1 3
@@ -54,6 +60,11 @@ python main.py -d cifar -b 32 --ours -k 3 --normalization pono --order s_curve -
 Complete top region of CIFAR10 images:
 ```
 python main.py -d cifar -b 32 --ours -k 3 --normalization pono --order s_curve -dp 0 --mode sample --disable_wandb --run_dir runs/cifar_run --load_params cifar_s8.pth --sample_region custom --sample_offset1 -16 --sample_offset2 -16 --sample_size_h 12 --sample_size_w 32 --sample_batch_size 48 --base_order_reflect_rows
+```
+
+Sample MNIST digits with hilbert curve order:
+```
+python main.py -d mnist --ours -k 3 --normalization pono --order gilbert2d -dp 0 --sample_region full --load_params grayscale_mnist_ep299_8h.pth --mode sample --sample_batch_size 16 --disable_wandb
 ```
 
 ### Train model
@@ -68,5 +79,5 @@ python average_checkpoints.py --run_id 10000 --inputs runs/<RUN_DIR> --output av
 ```
 
 ### Credits
-This code was originally based on a [PyTorch implementation](https://github.com/pclucas14/pixel-cnn-pp) of [PixelCNN++](https://arxiv.org/pdf/1701.05517.pdf) by Lucas Caccia.
+This code was originally based on a [PyTorch implementation](https://github.com/pclucas14/pixel-cnn-pp) of [PixelCNN++](https://arxiv.org/pdf/1701.05517.pdf) by Lucas Caccia. `average_checkpoints.py` is sourced from the [fairseq](https://github.com/pytorch/fairseq/blob/master/scripts/average_checkpoints.py) project.
 
