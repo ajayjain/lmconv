@@ -83,5 +83,4 @@ python average_checkpoints.py --run_id 10000 --inputs runs/<RUN_DIR> --output av
 ```
 
 ### Credits
-This code was originally based on a [PyTorch implementation](https://github.com/pclucas14/pixel-cnn-pp) of [PixelCNN++](https://arxiv.org/pdf/1701.05517.pdf) by Lucas Caccia. `average_checkpoints.py` is sourced from the [fairseq](https://github.com/pytorch/fairseq/blob/master/scripts/average_checkpoints.py) project.
-
+This code was originally based on a [PyTorch implementation](https://github.com/pclucas14/pixel-cnn-pp) of [PixelCNN++](https://arxiv.org/pdf/1701.05517.pdf) by Lucas Caccia. Jakub Červený [authored](https://github.com/jakubcerveny/gilbert) `gilbert2d.py`, which generates a generalization of the Hilbert curve. Checkpoint averaging code, `average_checkpoints.py`, is sourced from the [fairseq](https://github.com/pytorch/fairseq/blob/master/scripts/average_checkpoints.py) project.
