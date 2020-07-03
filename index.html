@@ -50,23 +50,22 @@
       <center><span style="font-size:20px;"><a href='http://www.auai.org/uai2020/'>Conference on Uncertainty in AI (UAI), 2020</a></span></center>
 
       <div class="table-like" style="justify-content:space-evenly;max-width:700px;margin:auto;padding:5px">
-        <div><center><span style="font-size:28px"><a href='resources/2020_jain_abbeel_pathak_lmconv.pdf'>[Paper]</a></span></center></div>
-        <div><center><span style="font-size:28px"><a href='https://arxiv.org/abs/2006.12486'>[arXiv]</a></span></center></div>
-        <div><center><span style="font-size:28px"><a href='https://github.com/ajayjain/lmconv'>[GitHub]</a></span></center> </div>
+        <div><center><span style="font-size:28px"><a href='https://arxiv.org/pdf/2006.12486.pdf'>[Paper]</a></span></center></div>
+        <div><center><span style="font-size:28px"><a href='https://github.com/ajayjain/lmconv'>[GitHub Code]</a></span></center> </div>
       </div>
 
       <div style="width:800px; margin:0 auto; text-align=right;">
       <p>
       <b>Summary:</b> Our Locally Masked PixelCNN generates natural images in customizable orders like zig-zags and Hilbert Curves.
-      We train a single PixelCNN++ to support 8 generation orders simultaneously, outperforming PixelCNN++ on distribution estimation 
+      We train a single PixelCNN++ to support 8 generation orders simultaneously, outperforming PixelCNN++ on distribution estimation
       and allowing globally coherent image completions on CIFAR10, CelebA-HQ and MNIST.
       We control the order with our proposed locally masked convolution operation, which is efficient and easy to implement via matrix multiplication.
     </p>
       <a href="resources/lmconv_overview.png"><img width="768" max-width="100%" src="resources/lmconv_overview.png" /></a>
       <p>
-        <b>Abstract:</b> There is substantial interest in modeling high dimensional data distributions such as images, with applications including compression, multimedia generation, anomaly detection, and data completion. 
-        State-of-the-art density estimators for natural images are autoregressive, decomposing the joint distribution over pixels into a product of conditionals. 
-        The conditional distributions are parameterized by an expressive deep neural network, <em>e.g.</em> a convolutional neural network such as the PixelCNN. 
+        <b>Abstract:</b> There is substantial interest in modeling high dimensional data distributions such as images, with applications including compression, multimedia generation, anomaly detection, and data completion.
+        State-of-the-art density estimators for natural images are autoregressive, decomposing the joint distribution over pixels into a product of conditionals.
+        The conditional distributions are parameterized by an expressive deep neural network, <em>e.g.</em> a convolutional neural network such as the PixelCNN.
         However, convolutional autoregressive models can only model a single decomposition of the joint where only a single generation order is efficient.
         For tasks such as missing data completion, these models are unable to use much of the observed context.
         To generate data in arbitrary orders, we introduce LMConv: a simple modification to the standard 2D convolution that allows arbitrary masks to be applied to the weights at each location in the image.
@@ -90,17 +89,17 @@
       <center><a href="resources/teaser_color.png"><img src = "resources/teaser_color.png" width="800px" ></img></a><br></center>
       <hr>
 
-      <center><h1>Customizing the order</h1></center>
+      <center><h1>Customized Order along Hilbert Curve</h1></center>
       <div style="width:800px; margin:0 auto 10px auto; text-align: left">
-        We trained a Locally Masked PixelCNN to generate binary MNIST digits along Hilbert space-filling curves.
-        With this order, consecutively generated pixels lie in the same neighborhood of the image.
+        Since Locally Masked PixelCNN can support arbitrary orders, we trained it to generate binary MNIST digits along Hilbert space-filling curves.
+        With this order, consecutively generated pixels lie in the same neighborhood of the image agnostic to its resolution.
       </div>
       <center>
-      <video width="240" height="240" autoplay loop controls>
+      <video width="400" height="400" controls autoplay loop>
         <source src="resources/lmconv_hilbert.mp4" type="video/mp4">
         <!-- <source src="movie.ogg" type="video/ogg"> -->
       Your browser does not support the video tag.
-      </video>        
+      </video>
       </center>
       <br />
       <hr>
@@ -135,9 +134,9 @@
               <tr>
               <td width=250px align=left>
               <!-- <p style="margin-top:4px;"></p> -->
-              <img style="height:150px" src="resources/thumbnail.png"/>
+              <a href="https://arxiv.org/pdf/2006.12486.pdf" target="_blank"><img style="height:150px" src="resources/thumbnail.png"/></a>
               <center>
-              <!-- <span style="font-size:20pt">[Paper forthcoming]</span> -->
+              <span style="font-size:20pt"><a href="https://arxiv.org/pdf/2006.12486.pdf" target="_blank">[Paper]</a></span>
               </center>
               </td>
               <td width=20px align=center>
