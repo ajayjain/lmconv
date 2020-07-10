@@ -1,4 +1,6 @@
 ## Locally Masked Convolution
+Ajay Jain, Pieter Abbeel and Deepak Pathak
+
 Code for the UAI 2020 paper "Locally Masked Convolution for Autoregressive Models", implemented with PyTorch. The Locally Masked Convolution layer allows PixelCNN-style autoregressive models to use a custom pixel generation order, rather than a raster scan. Training and evaluation code are available in `main.py`. To use locally masked convolutions in your project, see `locally_masked_convolution.py` for a memory-efficient implementation that depends only on torch. The layer uses masks that are generated in `masking.py`.
 
 Paper: [https://arxiv.org/abs/2006.12486](https://arxiv.org/abs/2006.12486)
@@ -61,14 +63,20 @@ Evaluate CIFAR10 conditional (inpainting) likelihoods for the top half of image 
 python main.py -d cifar -b 32 --ours -k 3 --normalization pono --order s_curve --randomize_order -dp 0 --mode test --disable_wandb --run_dir runs/cifar_run --load_params cifar_s8.pth --test_region custom --test_maxh 16 --test_maxw 32 --test_masks 1 3
 ```
 
-Complete top region of CIFAR10 images:
+Complete top region of CIFAR10 images. We add flag `--base_order_reflect_rows` to flip the rows of the scan, generating the top region last:
 ```
 python main.py -d cifar -b 32 --ours -k 3 --normalization pono --order s_curve -dp 0 --mode sample --disable_wandb --run_dir runs/cifar_run --load_params cifar_s8.pth --sample_region custom --sample_offset1 -16 --sample_offset2 -16 --sample_size_h 12 --sample_size_w 32 --sample_batch_size 48 --base_order_reflect_rows
 ```
 
+Complete left half of CelebA-HQ 64x64 images with larger model (320 filters). We add flags `--base_order_transpose --base_order_reflect_cols` to traverse the left half of the image last:
+```
+mkdir runs/celeba_run
+python main.py -d celebahq -b 24 --ours -md 2 -k 3 --normalization pono --order s_curve -dp 0 --mode sample --disable_wandb --run_dir runs/celeba_run --load_params celeba_ep749_s8.pth --sample_region custom --sample_offset1 -32 --sample_offset2 -32 --sample_size_h 64 --sample_size_w 32 --sample_batch_size 24 --base_order_transpose --base_order_reflect_cols --celeba_size 64 --n_bits 5 --nr_filters 320
+```
+
 Sample MNIST digits with hilbert curve order:
 ```
-python main.py -d mnist --ours -k 3 --normalization pono --order gilbert2d -dp 0 --sample_region full --load_params grayscale_mnist_ep299_8h.pth --mode sample --sample_batch_size 16 --disable_wandb
+python main.py -d mnist --ours -k 3 --normalization pono --order gilbert2d -dp 0 --sample_region full --load_params grayscale_mnist_ep299_hilbert8.pth --mode sample --sample_batch_size 16 --disable_wandb
 ```
 
 ### Train model
@@ -80,6 +88,11 @@ python main.py -d cifar -b 32 -t 10 --ours -c 2e6 -k 3 --normalization pono --or
 Average checkpoints (optional, helps likelihoods slightly. need to train with `-t 1` to save checkpoints every epoch):
 ```
 python average_checkpoints.py --run_id 10000 --inputs runs/<RUN_DIR> --output averaged.pth --num-epoch-checkpoints <NUM_CHECKPOINTS>
+```
+
+Train larger model on CelebA-HQ 64x64 resolution. You may wish to add `--ema 0.999` as an argument to apply EMA to weights:
+```
+python main.py -d celebahq -b 32 --ours -c 2e6 -md 2 -k 3 --normalization pono --order s_curve --randomize_order -dp 0 --exp_name s_rand_dp0_pono_5bit_64x64 -ID 20000 --celeba_size 64 --max_celeba_train_batches 500 --max_celeba_test_batches 15 --sample_region full --n_bits 5 --sample_interval 10 --sample_batch_size 8 --nr_filters 320 --test_interval 5 -t 5
 ```
 
 ### Credits
